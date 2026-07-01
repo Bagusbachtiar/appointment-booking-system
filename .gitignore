@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+backend/.env
+
+# Google OAuth credentials (contains client_secret and tokens — never commit)
+credentials.json
+token.json
+client_secret_*.json
+
+# SQLite database files
+backend/appointments.db
+backend/appointments.db-shm
+backend/appointments.db-wal
+
+# Build output
+admin/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
