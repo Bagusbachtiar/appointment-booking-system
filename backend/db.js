@@ -34,6 +34,15 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_date ON appointments(date);
     CREATE INDEX IF NOT EXISTS idx_status ON appointments(status);
   `);
+
+  // Add reminder columns if not exist (safe to run on existing DB)
+  const cols = database.prepare("PRAGMA table_info(appointments)").all().map(c => c.name);
+  if (!cols.includes('reminder_24h_sent')) {
+    database.exec("ALTER TABLE appointments ADD COLUMN reminder_24h_sent INTEGER DEFAULT 0");
+  }
+  if (!cols.includes('reminder_2h_sent')) {
+    database.exec("ALTER TABLE appointments ADD COLUMN reminder_2h_sent INTEGER DEFAULT 0");
+  }
   console.log('DB ready');
 }
 

@@ -56,4 +56,56 @@ router.get('/', (req, res) => {
   }
 });
 
+// GET /api/appointments/pending-reminders
+// Returns appointments needing 24h or 2h reminder (not yet sent)
+router.get('/pending-reminders', (req, res) => {
+  try {
+    const db = getDb();
+    const tz_offset = parseInt(process.env.TZ_OFFSET || '7'); // UTC+7 Jakarta
+    const nowUtc = Date.now();
+    const nowLocal = new Date(nowUtc + tz_offset * 3600000);
+
+    const reminders = [];
+    const appts = db.prepare(`
+      SELECT * FROM appointments
+      WHERE status = 'confirmed'
+      AND date >= date('now', '-1 day')
+    `).all();
+
+    for (const appt of appts) {
+      const apptMs = new Date(`${appt.date}T${appt.time}:00+0${tz_offset}:00`).getTime();
+      const diffMs = apptMs - nowUtc;
+      const diffHr = diffMs / 3600000;
+
+      if (diffHr >= 23 && diffHr <= 25 && !appt.reminder_24h_sent) {
+        reminders.push({ ...appt, reminderType: '24h' });
+      } else if (diffHr >= 1 && diffHr <= 3 && !appt.reminder_2h_sent) {
+        reminders.push({ ...appt, reminderType: '2h' });
+      }
+    }
+
+    res.json(reminders);
+  } catch (e) {
+    console.error('[pending-reminders]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/appointments/:id/mark-reminder
+router.post('/:id/mark-reminder', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reminderType } = req.body;
+    const db = getDb();
+
+    const col = reminderType === '24h' ? 'reminder_24h_sent' : 'reminder_2h_sent';
+    db.prepare(`UPDATE appointments SET ${col} = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+
+    res.json({ success: true, id, reminderType });
+  } catch (e) {
+    console.error('[mark-reminder]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
