@@ -148,7 +148,7 @@ export default function Appointments() {
                   <td className="px-4 py-3.5 font-mono text-xs text-zinc-400">{a.phone || '—'}</td>
                   <td className="px-4 py-3.5"><ServicePill service={a.service} /></td>
                   <td className="px-4 py-3.5 font-mono text-xs text-zinc-300">
-                    {a.date ? format(parseISO(a.date), 'd MMM yyyy') : '—'}
+                    {a.date ? format(parseISO(a.date), 'EEE, d MMM yyyy') : '—'}
                   </td>
                   <td className="px-4 py-3.5 font-mono text-xs text-zinc-300">{a.time || '—'}</td>
                   <td className="px-4 py-3.5 font-mono text-xs text-zinc-500">{a.duration ? `${a.duration}m` : '—'}</td>

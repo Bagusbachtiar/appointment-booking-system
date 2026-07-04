@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-03T13:45:10.888Z",
+  "updatedAt": "2026-07-04T08:56:46.199Z",
   "createdAt": "2026-06-30T16:01:25.986Z",
   "id": "2fyrX7SJFdRUNh9f",
   "name": "WhatsApp appointment booking automation",
@@ -160,6 +160,18 @@
               "name": "customerKey",
               "value": "={{ 'appt:customer:' + $('Parse Webhook').item.json.from }}",
               "type": "string"
+            },
+            {
+              "id": "a7",
+              "name": "type",
+              "value": "={{ $('Parse Webhook').item.json.type }}",
+              "type": "string"
+            },
+            {
+              "id": "a8",
+              "name": "audioId",
+              "value": "={{ $('Parse Webhook').item.json.audioId || '' }}",
+              "type": "string"
             }
           ]
         },
@@ -170,7 +182,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1328,
+        1264,
         304
       ]
     },
@@ -220,7 +232,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $('Prepare Data').item.json;\nconst convRaw = $('Get Conversation').item.json.value;\nconst custRaw = $('Get Customer Data').item.json.value;\n\nlet conversation = [];\ntry { conversation = JSON.parse(convRaw || '[]'); } catch(e) {}\n\nlet customer = {};\ntry { customer = JSON.parse(custRaw || '{}'); } catch(e) {}\n\nreturn [{\n  json: {\n    from: data.from,\n    text: data.text,\n    name: data.name || customer.name || '',\n    phoneNumberId: data.phoneNumberId,\n    sessionKey: data.sessionKey,\n    customerKey: data.customerKey,\n    conversation,\n    customer,\n    pendingBooking: customer.pendingBooking || null\n  }\n}];"
+        "jsCode": "const data = $('Prepare Data').item.json;\nconst convRaw = $('Get Conversation').item.json.value;\nconst custRaw = $('Get Customer Data').item.json.value;\n\n// For voice messages, use transcribed text from Inject Transcription\nlet text = data.text;\ntry {\n  const inj = $('Inject Transcription').item.json;\n  if (inj && inj.isVoiceMessage) text = inj.text;\n} catch(e) {}\n\nlet conversation = [];\ntry { conversation = JSON.parse(convRaw || '[]'); } catch(e) {}\n\nlet customer = {};\ntry { customer = JSON.parse(custRaw || '{}'); } catch(e) {}\n\nreturn [{\n  json: {\n    from: data.from,\n    text,\n    name: data.name || customer.name || '',\n    phoneNumberId: data.phoneNumberId,\n    sessionKey: data.sessionKey,\n    customerKey: data.customerKey,\n    conversation,\n    customer,\n    pendingBooking: customer.pendingBooking || null\n  }\n}];"
       },
       "id": "appt-n010",
       "name": "Build AI Context",
@@ -233,7 +245,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - don't send to LLM, 100% reliable\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const num = parseInt(ctx.text.trim());\n  const slots = ctx.pendingBooking.slots || [];\n  if (num >= 1 && num <= slots.length) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: num - 1, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst today = new Date().toISOString().slice(0, 10);\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + today + \".\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + today + \"\\n\" +\n  \"- Write reply in friendly conversational tone\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
+        "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - handles typed (1/2/3), time strings, am/pm, ordinals EN+ID\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const slots = ctx.pendingBooking.slots || [];\n  const txt = ctx.text.trim().toLowerCase();\n  let slotIndex = -1;\n\n  // Numeric: 1, 2, 3\n  const num = parseInt(txt);\n  if (num >= 1 && num <= slots.length) slotIndex = num - 1;\n\n  // Number > 3: treat as time hour (e.g. \"9\" = 09:00, \"10\" = 10:00)\n  if (slotIndex < 0 && !isNaN(num) && num >= 1 && num <= 23) {\n    const hh = String(num).padStart(2, '0');\n    slotIndex = slots.findIndex(s => s.time === hh + ':00');\n    if (slotIndex < 0) slotIndex = slots.findIndex(s => s.time === hh + ':30');\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (slotIndex < 0) {\n    const tm = txt.match(/(d{1,2})[.:](d{2})/);\n    if (tm) {\n      const timeStr = tm[1].padStart(2, '0') + ':' + tm[2];\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (slotIndex < 0) {\n    const ampm = txt.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) {\n      const timeStr = ampm[1].padStart(2, '0') + ':' + (ampm[2] || '00');\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Spoken time — full EN + ID lookup table\n  if (slotIndex < 0) {\n    const hourMap = {\n      // English\n      'one': '01', 'two': '02', 'three': '03', 'four': '04',\n      'five': '05', 'six': '06', 'seven': '07', 'eight': '08',\n      'nine': '09', 'ten': '10', 'eleven': '11', 'twelve': '12',\n      // Indonesian\n      'satu': '01', 'dua': '02', 'tiga': '03', 'empat': '04',\n      'lima': '05', 'enam': '06', 'tujuh': '07', 'delapan': '08',\n      'sembilan': '09', 'sepuluh': '10', 'sebelas': '11', 'dua belas': '12'\n    };\n    const minuteMap = {\n      'thirty': '30', 'half': '30', 'tiga puluh': '30',\n      'fifteen': '15', 'quarter': '15', 'lima belas': '15',\n      'forty five': '45', 'empat puluh lima': '45'\n    };\n    // setengah X = half past (X-1) in Indonesian: \"setengah sepuluh\" = 09:30\n    const setengahMap = {\n      'dua': '01', 'tiga': '02', 'empat': '03', 'lima': '04',\n      'enam': '05', 'tujuh': '06', 'delapan': '07', 'sembilan': '08',\n      'sepuluh': '09', 'sebelas': '10', 'dua belas': '11'\n    };\n    // Check \"setengah X\" first (Indonesian half-past)\n    const setengahMatch = txt.match(/setengah\\s+(\\w+(?:\\s+\\w+)?)/);\n    if (setengahMatch) {\n      const nextWord = setengahMatch[1];\n      if (setengahMap[nextWord]) slotIndex = slots.findIndex(s => s.time === setengahMap[nextWord] + ':30');\n    }\n    // Check hour word + optional minute word\n    if (slotIndex < 0) {\n      let hour = null, minute = '00';\n      // Try two-word hours first (dua belas, etc.)\n      for (const [word, h] of Object.entries(hourMap)) {\n        if (txt.includes(word)) { hour = h; break; }\n      }\n      if (hour) {\n        for (const [word, m] of Object.entries(minuteMap)) {\n          if (txt.includes(word)) { minute = m; break; }\n        }\n        slotIndex = slots.findIndex(s => s.time === hour + ':' + minute);\n      }\n    }\n  }\n\n    // Ordinals — English + Indonesian\n  if (slotIndex < 0) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','two','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','three','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => txt.includes(k))) { slotIndex = i; break; }\n    }\n  }\n\n  if (slotIndex >= 0) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: slotIndex, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst todayDate = new Date();\nconst today = todayDate.toISOString().slice(0, 10);\nconst dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\nconst todayFull = dayNames[todayDate.getDay()] + ', ' + today;\n\n// Pre-compute next 7 days with explicit day-name → date mapping (so LLM doesn't need to calculate)\nconst dateMap = [];\nfor (let i = 1; i <= 7; i++) {\n  const d = new Date(todayDate);\n  d.setDate(todayDate.getDate() + i);\n  const iso = d.toISOString().slice(0, 10);\n  const label = i === 1 ? 'Tomorrow' : dayNames[d.getDay()];\n  dateMap.push('- ' + label + ': ' + iso);\n}\nconst upcomingDays = dateMap.join('\\n');\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + todayFull + \".\\n\" +\n      \"Upcoming dates:\\n\" + upcomingDays + \"\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + todayFull + \"\\n\" +\n  \"- Write reply in friendly conversational tone\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
       },
       "id": "appt-n011",
       "name": "Build Ollama Request",
@@ -318,7 +330,6 @@
       ]
     },
     {
-      "continueOnFail": true,
       "parameters": {
         "url": "http://host.docker.internal:3000/api/calendar/availability",
         "sendQuery": true,
@@ -343,7 +354,8 @@
       "position": [
         3088,
         0
-      ]
+      ],
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -414,7 +426,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst pending = ctx.pendingBooking;\nconst text = ctx.text.trim().toLowerCase();\n\nif (!pending || !pending.step) {\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you? You can book, reschedule, or cancel an appointment.' } }];\n}\n\nif (pending.step === 'awaiting_slot_selection') {\n  const choice = parseInt(text) - 1;\n  const slot = pending.slots && pending.slots[choice] ? pending.slots[choice] : null;\n  if (!slot) {\n    return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Please reply with *1*, *2*, or *3* to select your preferred time slot.' } }];\n  }\n  const confirmAction = pending.isReschedule ? 'reschedule_event' : 'create_event';\n  return [{ json: { ...ctx, confirmAction: confirmAction, selectedSlot: slot, pending } }];\n}\n\nif (pending.step === 'awaiting_cancel_confirmation') {\n  if (text === 'yes' || text === 'ya' || text === 'yeah' || text === 'yep' || text === 'ok' || text === 'okay') {\n    return [{ json: { ...ctx, confirmAction: 'cancel_event', pending } }];\n  }\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Cancellation aborted. Your appointment is still active.' } }];\n}\n\nreturn [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you?' } }];\n"
+        "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst pending = ctx.pendingBooking;\nconst text = ctx.text.trim().toLowerCase();\n\nif (!pending || !pending.step) {\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you? You can book, reschedule, or cancel an appointment.' } }];\n}\n\nif (pending.step === 'awaiting_slot_selection') {\n  // If Parse Intent Response bypass already resolved the slot, use it directly\n  if (ctx.selectedSlot) {\n    const confirmAction = pending.isReschedule ? 'reschedule_event' : 'create_event';\n    return [{ json: { ...ctx, confirmAction, selectedSlot: ctx.selectedSlot, pending } }];\n  }\n\n  const slots = pending.slots || [];\n  let slot = null;\n\n  // Numeric: 1, 2, 3\n  const choice = parseInt(text) - 1;\n  if (choice >= 0 && choice < slots.length) slot = slots[choice];\n\n  // Number as hour: \"9\" = 09:00\n  if (!slot && !isNaN(parseInt(text))) {\n    const hh = String(parseInt(text)).padStart(2, '0');\n    slot = slots.find(s => s.time === hh + ':00') || slots.find(s => s.time === hh + ':30') || null;\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (!slot) {\n    const tm = text.match(/(\\d{1,2})[.:]( \\d{2})/);\n    if (tm) slot = slots.find(s => s.time === tm[1].padStart(2,'0') + ':' + tm[2].trim()) || null;\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (!slot) {\n    const ampm = text.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) slot = slots.find(s => s.time === ampm[1].padStart(2,'0') + ':' + (ampm[2] || '00')) || null;\n  }\n\n  // Spoken hour words EN + ID\n  if (!slot) {\n    const hourMap = {\n      'one':'01','two':'02','three':'03','four':'04','five':'05','six':'06',\n      'seven':'07','eight':'08','nine':'09','ten':'10','eleven':'11','twelve':'12',\n      'satu':'01','dua':'02','tiga':'03','empat':'04','lima':'05','enam':'06',\n      'tujuh':'07','delapan':'08','sembilan':'09','sepuluh':'10','sebelas':'11'\n    };\n    const minuteMap = { 'thirty':'30','half':'30','tiga puluh':'30' };\n    let hour = null, minute = '00';\n    for (const [w, h] of Object.entries(hourMap)) { if (text.includes(w)) { hour = h; break; } }\n    if (hour) {\n      for (const [w, m] of Object.entries(minuteMap)) { if (text.includes(w)) { minute = m; break; } }\n      slot = slots.find(s => s.time === hour + ':' + minute) || null;\n    }\n  }\n\n  // Ordinals EN + ID\n  if (!slot) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => text.includes(k))) { slot = slots[i]; break; }\n    }\n  }\n\n  if (!slot) {\n    return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Please reply with *1*, *2*, or *3* to select your preferred time slot.' } }];\n  }\n  const confirmAction = pending.isReschedule ? 'reschedule_event' : 'create_event';\n  return [{ json: { ...ctx, confirmAction, selectedSlot: slot, pending } }];\n}\n\nif (pending.step === 'awaiting_cancel_confirmation') {\n  if (text === 'yes' || text === 'ya' || text === 'yeah' || text === 'yep' || text === 'ok' || text === 'okay') {\n    return [{ json: { ...ctx, confirmAction: 'cancel_event', pending } }];\n  }\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Cancellation aborted. Your appointment is still active.' } }];\n}\n\nreturn [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you?' } }];"
       },
       "id": "appt-n021",
       "name": "Handle Confirmation",
@@ -439,10 +451,13 @@
             },
             {
               "value2": "reschedule_event"
+            },
+            {
+              "value2": "none"
             }
           ]
         },
-        "fallbackOutput": "extra"
+        "fallbackOutput": 3
       },
       "id": "appt-n022",
       "name": "Confirmation Action?",
@@ -458,10 +473,10 @@
         "method": "POST",
         "url": "http://host.docker.internal:3000/api/calendar/events",
         "sendBody": true,
-        "options": {},
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({ service: $json.extracted.service, date: $json.extracted.date, time: $json.extracted.time, name: $json.extracted.name || $json.name || $json.from, phone: $json.from, notes: $json.extracted.notes || null }) }}"
+        "body": "={{ JSON.stringify({ service: $json.extracted.service, date: $json.extracted.date, time: $json.extracted.time, name: $json.extracted.name || $json.name || $json.from, phone: $json.from, notes: $json.extracted.notes || null }) }}",
+        "options": {}
       },
       "id": "appt-n023",
       "name": "Create Calendar Event",
@@ -588,26 +603,11 @@
       }
     },
     {
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "pcFpAYQlwDZ3PiNX",
-          "name": "Header Auth account"
-        }
-      },
       "parameters": {
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
         "method": "POST",
         "url": "={{ 'https://graph.facebook.com/v19.0/' + $('Save Conversation Prep').item.json.phoneNumberId + '/messages' }}",
-        "sendHeaders": false,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
@@ -621,17 +621,15 @@
       "position": [
         4624,
         752
-      ]
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "pcFpAYQlwDZ3PiNX",
+          "name": "Header Auth account"
+        }
+      }
     },
     {
-      "id": "resched1",
-      "name": "Create Reschedule Event",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2200,
-        500
-      ],
       "parameters": {
         "method": "POST",
         "url": "http://host.docker.internal:3000/api/calendar/events",
@@ -640,45 +638,45 @@
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify({ service: $json.pending.service, date: $json.pending.date, time: $json.selectedSlot.time, name: $json.pending.name || $json.name || $json.from, phone: $json.from, notes: null }) }}",
         "options": {}
-      }
+      },
+      "id": "resched1",
+      "name": "Create Reschedule Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2208,
+        512
+      ]
     },
     {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ \"http://host.docker.internal:3000/api/calendar/events/\" + $(\"Handle Confirmation\").item.json.pending.existingCalendarEventId }}",
+        "options": {}
+      },
       "id": "resched2",
       "name": "Cancel Old Appointment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2420,
-        500
-      ],
-      "parameters": {
-        "method": "DELETE",
-        "url": "={{ \"http://host.docker.internal:3000/api/calendar/events/\" + $(\"Handle Confirmation\").item.json.pending.existingCalendarEventId }}",
-        "options": {}
-      }
+        2432,
+        512
+      ]
     },
     {
+      "parameters": {
+        "jsCode": "const ctx = $('Handle Confirmation').item.json;\nconst result = $input.first().json;\n\nconst msg = 'Your appointment has been rescheduled!\\n\\n' +\n  'Service: ' + ctx.pending.service + '\\n' +\n  'New Date: ' + ctx.pending.date + '\\n' +\n  'New Time: ' + ctx.selectedSlot.time + '\\n\\n' +\n  'Your old appointment has been cancelled. We look forward to seeing you!';\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: msg,\n    pendingBooking: null\n  }\n}];\n"
+      },
       "id": "resched3",
       "name": "Format Reschedule Confirmed",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         2640,
-        500
-      ],
-      "parameters": {
-        "jsCode": "const ctx = $('Handle Confirmation').item.json;\nconst result = $input.first().json;\n\nconst msg = 'Your appointment has been rescheduled!\\n\\n' +\n  'Service: ' + ctx.pending.service + '\\n' +\n  'New Date: ' + ctx.pending.date + '\\n' +\n  'New Time: ' + ctx.selectedSlot.time + '\\n\\n' +\n  'Your old appointment has been cancelled. We look forward to seeing you!';\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: msg,\n    pendingBooking: null\n  }\n}];\n"
-      }
+        512
+      ]
     },
     {
-      "id": "appt-voice-001",
-      "name": "Is Voice Message?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [
-        1440,
-        304
-      ],
       "parameters": {
         "conditions": {
           "string": [
@@ -688,76 +686,67 @@
             }
           ]
         }
-      }
+      },
+      "id": "appt-voice-001",
+      "name": "Is Voice Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1376,
+        304
+      ]
     },
     {
+      "parameters": {
+        "url": "={{ 'https://graph.facebook.com/v19.0/' + $json.audioId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
       "id": "appt-voice-002",
       "name": "Get Audio URL",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1552,
-        80
+        1472,
+        16
       ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "pcFpAYQlwDZ3PiNX",
           "name": "Header Auth account"
         }
-      },
-      "parameters": {
-        "method": "GET",
-        "url": "={{ 'https://graph.facebook.com/v19.0/' + $json.audioId }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {}
       }
     },
     {
-      "id": "appt-voice-003",
-      "name": "Download Audio",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [
-        1776,
-        80
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "pcFpAYQlwDZ3PiNX",
-          "name": "Header Auth account"
-        }
-      },
       "parameters": {
-        "method": "GET",
         "url": "={{ $json.url }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
           "response": {
             "response": {
-              "responseFormat": "file",
-              "outputPropertyName": "data"
+              "responseFormat": "file"
             }
           }
+        }
+      },
+      "id": "appt-voice-003",
+      "name": "Download Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1648,
+        16
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "pcFpAYQlwDZ3PiNX",
+          "name": "Header Auth account"
         }
       }
     },
     {
-      "id": "appt-voice-004",
-      "name": "Transcribe Audio",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [
-        2000,
-        80
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "Y5W9LFb3jdX34kFz",
-          "name": "Groq API"
-        }
-      },
       "parameters": {
         "method": "POST",
         "url": "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -783,20 +772,34 @@
           ]
         },
         "options": {}
+      },
+      "id": "appt-voice-004",
+      "name": "Transcribe Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1808,
+        16
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Y5W9LFb3jdX34kFz",
+          "name": "Groq API"
+        }
       }
     },
     {
+      "parameters": {
+        "jsCode": "const transcription = $input.first().json.text || '';\nconst ctx = $('Prepare Data').item.json;\nreturn [{\n  json: {\n    ...ctx,\n    text: transcription,\n    isVoiceMessage: true\n  }\n}];"
+      },
       "id": "appt-voice-005",
       "name": "Inject Transcription",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2224,
-        80
-      ],
-      "parameters": {
-        "jsCode": "const transcription = $input.first().json.text || '';\nconst ctx = $('Prepare Data').item.json;\nreturn [{\n  json: {\n    ...ctx,\n    text: transcription,\n    isVoiceMessage: true\n  }\n}];"
-      }
+        1952,
+        16
+      ]
     }
   ],
   "connections": {
@@ -1288,9 +1291,9 @@
     "templateCredsSetupCompleted": true
   },
   "pinData": {},
-  "versionId": "e25a1033-78b7-405a-b1da-6877d35ee98d",
-  "activeVersionId": "e25a1033-78b7-405a-b1da-6877d35ee98d",
-  "versionCounter": 77,
+  "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
+  "activeVersionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
+  "versionCounter": 118,
   "triggerCount": 1,
   "shared": [
     {
@@ -1313,9 +1316,9 @@
   ],
   "tags": [],
   "activeVersion": {
-    "updatedAt": "2026-07-03T13:45:10.893Z",
-    "createdAt": "2026-07-03T13:45:10.893Z",
-    "versionId": "e25a1033-78b7-405a-b1da-6877d35ee98d",
+    "updatedAt": "2026-07-04T08:56:46.201Z",
+    "createdAt": "2026-07-04T08:56:46.201Z",
+    "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
     "workflowId": "2fyrX7SJFdRUNh9f",
     "nodes": [
       {
@@ -1471,6 +1474,18 @@
                 "name": "customerKey",
                 "value": "={{ 'appt:customer:' + $('Parse Webhook').item.json.from }}",
                 "type": "string"
+              },
+              {
+                "id": "a7",
+                "name": "type",
+                "value": "={{ $('Parse Webhook').item.json.type }}",
+                "type": "string"
+              },
+              {
+                "id": "a8",
+                "name": "audioId",
+                "value": "={{ $('Parse Webhook').item.json.audioId || '' }}",
+                "type": "string"
               }
             ]
           },
@@ -1481,7 +1496,7 @@
         "type": "n8n-nodes-base.set",
         "typeVersion": 3.4,
         "position": [
-          1328,
+          1264,
           304
         ]
       },
@@ -1531,7 +1546,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const data = $('Prepare Data').item.json;\nconst convRaw = $('Get Conversation').item.json.value;\nconst custRaw = $('Get Customer Data').item.json.value;\n\nlet conversation = [];\ntry { conversation = JSON.parse(convRaw || '[]'); } catch(e) {}\n\nlet customer = {};\ntry { customer = JSON.parse(custRaw || '{}'); } catch(e) {}\n\nreturn [{\n  json: {\n    from: data.from,\n    text: data.text,\n    name: data.name || customer.name || '',\n    phoneNumberId: data.phoneNumberId,\n    sessionKey: data.sessionKey,\n    customerKey: data.customerKey,\n    conversation,\n    customer,\n    pendingBooking: customer.pendingBooking || null\n  }\n}];"
+          "jsCode": "const data = $('Prepare Data').item.json;\nconst convRaw = $('Get Conversation').item.json.value;\nconst custRaw = $('Get Customer Data').item.json.value;\n\n// For voice messages, use transcribed text from Inject Transcription\nlet text = data.text;\ntry {\n  const inj = $('Inject Transcription').item.json;\n  if (inj && inj.isVoiceMessage) text = inj.text;\n} catch(e) {}\n\nlet conversation = [];\ntry { conversation = JSON.parse(convRaw || '[]'); } catch(e) {}\n\nlet customer = {};\ntry { customer = JSON.parse(custRaw || '{}'); } catch(e) {}\n\nreturn [{\n  json: {\n    from: data.from,\n    text,\n    name: data.name || customer.name || '',\n    phoneNumberId: data.phoneNumberId,\n    sessionKey: data.sessionKey,\n    customerKey: data.customerKey,\n    conversation,\n    customer,\n    pendingBooking: customer.pendingBooking || null\n  }\n}];"
         },
         "id": "appt-n010",
         "name": "Build AI Context",
@@ -1544,7 +1559,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - don't send to LLM, 100% reliable\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const num = parseInt(ctx.text.trim());\n  const slots = ctx.pendingBooking.slots || [];\n  if (num >= 1 && num <= slots.length) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: num - 1, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst today = new Date().toISOString().slice(0, 10);\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + today + \".\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + today + \"\\n\" +\n  \"- Write reply in friendly conversational tone\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
+          "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - handles typed (1/2/3), time strings, am/pm, ordinals EN+ID\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const slots = ctx.pendingBooking.slots || [];\n  const txt = ctx.text.trim().toLowerCase();\n  let slotIndex = -1;\n\n  // Numeric: 1, 2, 3\n  const num = parseInt(txt);\n  if (num >= 1 && num <= slots.length) slotIndex = num - 1;\n\n  // Number > 3: treat as time hour (e.g. \"9\" = 09:00, \"10\" = 10:00)\n  if (slotIndex < 0 && !isNaN(num) && num >= 1 && num <= 23) {\n    const hh = String(num).padStart(2, '0');\n    slotIndex = slots.findIndex(s => s.time === hh + ':00');\n    if (slotIndex < 0) slotIndex = slots.findIndex(s => s.time === hh + ':30');\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (slotIndex < 0) {\n    const tm = txt.match(/(d{1,2})[.:](d{2})/);\n    if (tm) {\n      const timeStr = tm[1].padStart(2, '0') + ':' + tm[2];\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (slotIndex < 0) {\n    const ampm = txt.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) {\n      const timeStr = ampm[1].padStart(2, '0') + ':' + (ampm[2] || '00');\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Spoken time — full EN + ID lookup table\n  if (slotIndex < 0) {\n    const hourMap = {\n      // English\n      'one': '01', 'two': '02', 'three': '03', 'four': '04',\n      'five': '05', 'six': '06', 'seven': '07', 'eight': '08',\n      'nine': '09', 'ten': '10', 'eleven': '11', 'twelve': '12',\n      // Indonesian\n      'satu': '01', 'dua': '02', 'tiga': '03', 'empat': '04',\n      'lima': '05', 'enam': '06', 'tujuh': '07', 'delapan': '08',\n      'sembilan': '09', 'sepuluh': '10', 'sebelas': '11', 'dua belas': '12'\n    };\n    const minuteMap = {\n      'thirty': '30', 'half': '30', 'tiga puluh': '30',\n      'fifteen': '15', 'quarter': '15', 'lima belas': '15',\n      'forty five': '45', 'empat puluh lima': '45'\n    };\n    // setengah X = half past (X-1) in Indonesian: \"setengah sepuluh\" = 09:30\n    const setengahMap = {\n      'dua': '01', 'tiga': '02', 'empat': '03', 'lima': '04',\n      'enam': '05', 'tujuh': '06', 'delapan': '07', 'sembilan': '08',\n      'sepuluh': '09', 'sebelas': '10', 'dua belas': '11'\n    };\n    // Check \"setengah X\" first (Indonesian half-past)\n    const setengahMatch = txt.match(/setengah\\s+(\\w+(?:\\s+\\w+)?)/);\n    if (setengahMatch) {\n      const nextWord = setengahMatch[1];\n      if (setengahMap[nextWord]) slotIndex = slots.findIndex(s => s.time === setengahMap[nextWord] + ':30');\n    }\n    // Check hour word + optional minute word\n    if (slotIndex < 0) {\n      let hour = null, minute = '00';\n      // Try two-word hours first (dua belas, etc.)\n      for (const [word, h] of Object.entries(hourMap)) {\n        if (txt.includes(word)) { hour = h; break; }\n      }\n      if (hour) {\n        for (const [word, m] of Object.entries(minuteMap)) {\n          if (txt.includes(word)) { minute = m; break; }\n        }\n        slotIndex = slots.findIndex(s => s.time === hour + ':' + minute);\n      }\n    }\n  }\n\n    // Ordinals — English + Indonesian\n  if (slotIndex < 0) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','two','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','three','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => txt.includes(k))) { slotIndex = i; break; }\n    }\n  }\n\n  if (slotIndex >= 0) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: slotIndex, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst todayDate = new Date();\nconst today = todayDate.toISOString().slice(0, 10);\nconst dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\nconst todayFull = dayNames[todayDate.getDay()] + ', ' + today;\n\n// Pre-compute next 7 days with explicit day-name → date mapping (so LLM doesn't need to calculate)\nconst dateMap = [];\nfor (let i = 1; i <= 7; i++) {\n  const d = new Date(todayDate);\n  d.setDate(todayDate.getDate() + i);\n  const iso = d.toISOString().slice(0, 10);\n  const label = i === 1 ? 'Tomorrow' : dayNames[d.getDay()];\n  dateMap.push('- ' + label + ': ' + iso);\n}\nconst upcomingDays = dateMap.join('\\n');\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + todayFull + \".\\n\" +\n      \"Upcoming dates:\\n\" + upcomingDays + \"\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + todayFull + \"\\n\" +\n  \"- Write reply in friendly conversational tone\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
         },
         "id": "appt-n011",
         "name": "Build Ollama Request",
@@ -1629,7 +1644,6 @@
         ]
       },
       {
-        "continueOnFail": true,
         "parameters": {
           "url": "http://host.docker.internal:3000/api/calendar/availability",
           "sendQuery": true,
@@ -1654,7 +1668,8 @@
         "position": [
           3088,
           0
-        ]
+        ],
+        "continueOnFail": true
       },
       {
         "parameters": {
@@ -1725,7 +1740,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst pending = ctx.pendingBooking;\nconst text = ctx.text.trim().toLowerCase();\n\nif (!pending || !pending.step) {\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you? You can book, reschedule, or cancel an appointment.' } }];\n}\n\nif (pending.step === 'awaiting_slot_selection') {\n  const choice = parseInt(text) - 1;\n  const slot = pending.slots && pending.slots[choice] ? pending.slots[choice] : null;\n  if (!slot) {\n    return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Please reply with *1*, *2*, or *3* to select your preferred time slot.' } }];\n  }\n  const confirmAction = pending.isReschedule ? 'reschedule_event' : 'create_event';\n  return [{ json: { ...ctx, confirmAction: confirmAction, selectedSlot: slot, pending } }];\n}\n\nif (pending.step === 'awaiting_cancel_confirmation') {\n  if (text === 'yes' || text === 'ya' || text === 'yeah' || text === 'yep' || text === 'ok' || text === 'okay') {\n    return [{ json: { ...ctx, confirmAction: 'cancel_event', pending } }];\n  }\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Cancellation aborted. Your appointment is still active.' } }];\n}\n\nreturn [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you?' } }];\n"
+          "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst pending = ctx.pendingBooking;\nconst text = ctx.text.trim().toLowerCase();\n\nif (!pending || !pending.step) {\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you? You can book, reschedule, or cancel an appointment.' } }];\n}\n\nif (pending.step === 'awaiting_slot_selection') {\n  // If Parse Intent Response bypass already resolved the slot, use it directly\n  if (ctx.selectedSlot) {\n    const confirmAction = pending.isReschedule ? 'reschedule_event' : 'create_event';\n    return [{ json: { ...ctx, confirmAction, selectedSlot: ctx.selectedSlot, pending } }];\n  }\n\n  const slots = pending.slots || [];\n  let slot = null;\n\n  // Numeric: 1, 2, 3\n  const choice = parseInt(text) - 1;\n  if (choice >= 0 && choice < slots.length) slot = slots[choice];\n\n  // Number as hour: \"9\" = 09:00\n  if (!slot && !isNaN(parseInt(text))) {\n    const hh = String(parseInt(text)).padStart(2, '0');\n    slot = slots.find(s => s.time === hh + ':00') || slots.find(s => s.time === hh + ':30') || null;\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (!slot) {\n    const tm = text.match(/(\\d{1,2})[.:]( \\d{2})/);\n    if (tm) slot = slots.find(s => s.time === tm[1].padStart(2,'0') + ':' + tm[2].trim()) || null;\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (!slot) {\n    const ampm = text.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) slot = slots.find(s => s.time === ampm[1].padStart(2,'0') + ':' + (ampm[2] || '00')) || null;\n  }\n\n  // Spoken hour words EN + ID\n  if (!slot) {\n    const hourMap = {\n      'one':'01','two':'02','three':'03','four':'04','five':'05','six':'06',\n      'seven':'07','eight':'08','nine':'09','ten':'10','eleven':'11','twelve':'12',\n      'satu':'01','dua':'02','tiga':'03','empat':'04','lima':'05','enam':'06',\n      'tujuh':'07','delapan':'08','sembilan':'09','sepuluh':'10','sebelas':'11'\n    };\n    const minuteMap = { 'thirty':'30','half':'30','tiga puluh':'30' };\n    let hour = null, minute = '00';\n    for (const [w, h] of Object.entries(hourMap)) { if (text.includes(w)) { hour = h; break; } }\n    if (hour) {\n      for (const [w, m] of Object.entries(minuteMap)) { if (text.includes(w)) { minute = m; break; } }\n      slot = slots.find(s => s.time === hour + ':' + minute) || null;\n    }\n  }\n\n  // Ordinals EN + ID\n  if (!slot) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => text.includes(k))) { slot = slots[i]; break; }\n    }\n  }\n\n  if (!slot) {\n    return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Please reply with *1*, *2*, or *3* to select your preferred time slot.' } }];\n  }\n  const confirmAction = pending.isReschedule ? 'reschedule_event' : 'create_event';\n  return [{ json: { ...ctx, confirmAction, selectedSlot: slot, pending } }];\n}\n\nif (pending.step === 'awaiting_cancel_confirmation') {\n  if (text === 'yes' || text === 'ya' || text === 'yeah' || text === 'yep' || text === 'ok' || text === 'okay') {\n    return [{ json: { ...ctx, confirmAction: 'cancel_event', pending } }];\n  }\n  return [{ json: { ...ctx, confirmAction: 'none', responseText: 'Cancellation aborted. Your appointment is still active.' } }];\n}\n\nreturn [{ json: { ...ctx, confirmAction: 'none', responseText: ctx.aiReply || 'How can I help you?' } }];"
         },
         "id": "appt-n021",
         "name": "Handle Confirmation",
@@ -1750,10 +1765,13 @@
               },
               {
                 "value2": "reschedule_event"
+              },
+              {
+                "value2": "none"
               }
             ]
           },
-          "fallbackOutput": "extra"
+          "fallbackOutput": 3
         },
         "id": "appt-n022",
         "name": "Confirmation Action?",
@@ -1769,10 +1787,10 @@
           "method": "POST",
           "url": "http://host.docker.internal:3000/api/calendar/events",
           "sendBody": true,
-          "options": {},
           "contentType": "raw",
           "rawContentType": "application/json",
-          "body": "={{ JSON.stringify({ service: $json.extracted.service, date: $json.extracted.date, time: $json.extracted.time, name: $json.extracted.name || $json.name || $json.from, phone: $json.from, notes: $json.extracted.notes || null }) }}"
+          "body": "={{ JSON.stringify({ service: $json.extracted.service, date: $json.extracted.date, time: $json.extracted.time, name: $json.extracted.name || $json.name || $json.from, phone: $json.from, notes: $json.extracted.notes || null }) }}",
+          "options": {}
         },
         "id": "appt-n023",
         "name": "Create Calendar Event",
@@ -1899,26 +1917,11 @@
         }
       },
       {
-        "credentials": {
-          "httpHeaderAuth": {
-            "id": "pcFpAYQlwDZ3PiNX",
-            "name": "Header Auth account"
-          }
-        },
         "parameters": {
-          "authentication": "genericCredentialType",
-          "genericAuthType": "httpHeaderAuth",
           "method": "POST",
           "url": "={{ 'https://graph.facebook.com/v19.0/' + $('Save Conversation Prep').item.json.phoneNumberId + '/messages' }}",
-          "sendHeaders": false,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "Content-Type",
-                "value": "application/json"
-              }
-            ]
-          },
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
           "sendBody": true,
           "contentType": "raw",
           "rawContentType": "application/json",
@@ -1932,17 +1935,15 @@
         "position": [
           4624,
           752
-        ]
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "pcFpAYQlwDZ3PiNX",
+            "name": "Header Auth account"
+          }
+        }
       },
       {
-        "id": "resched1",
-        "name": "Create Reschedule Event",
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.2,
-        "position": [
-          2200,
-          500
-        ],
         "parameters": {
           "method": "POST",
           "url": "http://host.docker.internal:3000/api/calendar/events",
@@ -1951,45 +1952,45 @@
           "rawContentType": "application/json",
           "body": "={{ JSON.stringify({ service: $json.pending.service, date: $json.pending.date, time: $json.selectedSlot.time, name: $json.pending.name || $json.name || $json.from, phone: $json.from, notes: null }) }}",
           "options": {}
-        }
+        },
+        "id": "resched1",
+        "name": "Create Reschedule Event",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2208,
+          512
+        ]
       },
       {
+        "parameters": {
+          "method": "DELETE",
+          "url": "={{ \"http://host.docker.internal:3000/api/calendar/events/\" + $(\"Handle Confirmation\").item.json.pending.existingCalendarEventId }}",
+          "options": {}
+        },
         "id": "resched2",
         "name": "Cancel Old Appointment",
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.2,
         "position": [
-          2420,
-          500
-        ],
-        "parameters": {
-          "method": "DELETE",
-          "url": "={{ \"http://host.docker.internal:3000/api/calendar/events/\" + $(\"Handle Confirmation\").item.json.pending.existingCalendarEventId }}",
-          "options": {}
-        }
+          2432,
+          512
+        ]
       },
       {
+        "parameters": {
+          "jsCode": "const ctx = $('Handle Confirmation').item.json;\nconst result = $input.first().json;\n\nconst msg = 'Your appointment has been rescheduled!\\n\\n' +\n  'Service: ' + ctx.pending.service + '\\n' +\n  'New Date: ' + ctx.pending.date + '\\n' +\n  'New Time: ' + ctx.selectedSlot.time + '\\n\\n' +\n  'Your old appointment has been cancelled. We look forward to seeing you!';\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: msg,\n    pendingBooking: null\n  }\n}];\n"
+        },
         "id": "resched3",
         "name": "Format Reschedule Confirmed",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
           2640,
-          500
-        ],
-        "parameters": {
-          "jsCode": "const ctx = $('Handle Confirmation').item.json;\nconst result = $input.first().json;\n\nconst msg = 'Your appointment has been rescheduled!\\n\\n' +\n  'Service: ' + ctx.pending.service + '\\n' +\n  'New Date: ' + ctx.pending.date + '\\n' +\n  'New Time: ' + ctx.selectedSlot.time + '\\n\\n' +\n  'Your old appointment has been cancelled. We look forward to seeing you!';\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: msg,\n    pendingBooking: null\n  }\n}];\n"
-        }
+          512
+        ]
       },
       {
-        "id": "appt-voice-001",
-        "name": "Is Voice Message?",
-        "type": "n8n-nodes-base.if",
-        "typeVersion": 1,
-        "position": [
-          1440,
-          304
-        ],
         "parameters": {
           "conditions": {
             "string": [
@@ -1999,76 +2000,67 @@
               }
             ]
           }
-        }
+        },
+        "id": "appt-voice-001",
+        "name": "Is Voice Message?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [
+          1376,
+          304
+        ]
       },
       {
+        "parameters": {
+          "url": "={{ 'https://graph.facebook.com/v19.0/' + $json.audioId }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "options": {}
+        },
         "id": "appt-voice-002",
         "name": "Get Audio URL",
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          1552,
-          80
+          1472,
+          16
         ],
         "credentials": {
           "httpHeaderAuth": {
             "id": "pcFpAYQlwDZ3PiNX",
             "name": "Header Auth account"
           }
-        },
-        "parameters": {
-          "method": "GET",
-          "url": "={{ 'https://graph.facebook.com/v19.0/' + $json.audioId }}",
-          "authentication": "genericCredentialType",
-          "genericAuthType": "httpHeaderAuth",
-          "options": {}
         }
       },
       {
-        "id": "appt-voice-003",
-        "name": "Download Audio",
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.4,
-        "position": [
-          1776,
-          80
-        ],
-        "credentials": {
-          "httpHeaderAuth": {
-            "id": "pcFpAYQlwDZ3PiNX",
-            "name": "Header Auth account"
-          }
-        },
         "parameters": {
-          "method": "GET",
           "url": "={{ $json.url }}",
           "authentication": "genericCredentialType",
           "genericAuthType": "httpHeaderAuth",
           "options": {
             "response": {
               "response": {
-                "responseFormat": "file",
-                "outputPropertyName": "data"
+                "responseFormat": "file"
               }
             }
+          }
+        },
+        "id": "appt-voice-003",
+        "name": "Download Audio",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1648,
+          16
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "pcFpAYQlwDZ3PiNX",
+            "name": "Header Auth account"
           }
         }
       },
       {
-        "id": "appt-voice-004",
-        "name": "Transcribe Audio",
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.4,
-        "position": [
-          2000,
-          80
-        ],
-        "credentials": {
-          "httpHeaderAuth": {
-            "id": "Y5W9LFb3jdX34kFz",
-            "name": "Groq API"
-          }
-        },
         "parameters": {
           "method": "POST",
           "url": "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -2094,20 +2086,34 @@
             ]
           },
           "options": {}
+        },
+        "id": "appt-voice-004",
+        "name": "Transcribe Audio",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1808,
+          16
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "Y5W9LFb3jdX34kFz",
+            "name": "Groq API"
+          }
         }
       },
       {
+        "parameters": {
+          "jsCode": "const transcription = $input.first().json.text || '';\nconst ctx = $('Prepare Data').item.json;\nreturn [{\n  json: {\n    ...ctx,\n    text: transcription,\n    isVoiceMessage: true\n  }\n}];"
+        },
         "id": "appt-voice-005",
         "name": "Inject Transcription",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          2224,
-          80
-        ],
-        "parameters": {
-          "jsCode": "const transcription = $input.first().json.text || '';\nconst ctx = $('Prepare Data').item.json;\nreturn [{\n  json: {\n    ...ctx,\n    text: transcription,\n    isVoiceMessage: true\n  }\n}];"
-        }
+          1952,
+          16
+        ]
       }
     ],
     "connections": {
@@ -2594,18 +2600,18 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-07-03T13:45:11.065Z",
-        "id": 494,
+        "createdAt": "2026-07-04T08:56:46.279Z",
+        "id": 518,
         "workflowId": "2fyrX7SJFdRUNh9f",
-        "versionId": "e25a1033-78b7-405a-b1da-6877d35ee98d",
+        "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
         "event": "activated",
         "userId": "425d240d-1a04-4966-99d0-f9cdf7229c01"
       },
       {
-        "createdAt": "2026-07-03T13:45:11.025Z",
-        "id": 493,
+        "createdAt": "2026-07-04T08:56:46.254Z",
+        "id": 517,
         "workflowId": "2fyrX7SJFdRUNh9f",
-        "versionId": "e25a1033-78b7-405a-b1da-6877d35ee98d",
+        "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
         "event": "deactivated",
         "userId": "425d240d-1a04-4966-99d0-f9cdf7229c01"
       }
