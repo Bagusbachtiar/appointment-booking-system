@@ -359,7 +359,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst result = $input.first().json;\nconst slots = result.slots || [];\n\nif (!ctx.extracted.date) {\n  return [{\n    json: {\n      ...ctx,\n      responseText: ctx.aiReply || 'What date would you like to book? (e.g. Monday July 7)',\n      pendingBooking: { ...ctx.pendingBooking, service: ctx.extracted.service, step: 'awaiting_date' }\n    }\n  }];\n}\n\nif (!ctx.extracted.service) {\n  return [{\n    json: {\n      ...ctx,\n      responseText: 'Which service do you need?\\n\\n1. Cleaning (30 min)\\n2. First Visit (60 min)\\n3. Emergency (30 min)',\n      pendingBooking: { step: 'awaiting_service', date: ctx.extracted.date }\n    }\n  }];\n}\n\nif (slots.length === 0) {\n  return [{\n    json: {\n      ...ctx,\n      responseText: 'Sorry, no available slots on ' + ctx.extracted.date + '. Would you like to try a different date?',\n      pendingBooking: null\n    }\n  }];\n}\n\nconst topSlots = slots.slice(0, 3);\nconst isReschedule = ctx.pendingBooking && ctx.pendingBooking.existingAppointmentId;\n\nlet msg = 'Available slots for *' + ctx.extracted.service + '* on *' + ctx.extracted.date + '*:\\n\\n';\ntopSlots.forEach(function(slot, i) {\n  msg += (i + 1) + '. ' + slot.time + '\\n';\n});\nmsg += '\\nReply with *1*, *2*, or *3* to confirm your appointment.';\n\nconst newPendingBooking = {\n  service: ctx.extracted.service,\n  date: ctx.extracted.date,\n  name: ctx.extracted.name || ctx.name,\n  phone: ctx.from,\n  slots: topSlots,\n  step: 'awaiting_slot_selection'\n};\n\n// Preserve reschedule context if present\nif (isReschedule) {\n  newPendingBooking.existingAppointmentId = ctx.pendingBooking.existingAppointmentId;\n  newPendingBooking.existingCalendarEventId = ctx.pendingBooking.existingCalendarEventId;\n  newPendingBooking.isReschedule = true;\n}\n\nreturn [{\n  json: {\n    ...ctx,\n    responseText: msg,\n    pendingBooking: newPendingBooking\n  }\n}];\n"
+        "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst result = $input.first().json;\nconst slots = result.slots || [];\n\nif (!ctx.extracted.date) {\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: false,\n      responseText: ctx.aiReply || 'What date would you like to book? (e.g. Monday July 7)',\n      pendingBooking: { ...ctx.pendingBooking, service: ctx.extracted.service, step: 'awaiting_date' }\n    }\n  }];\n}\n\nif (!ctx.extracted.service) {\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: false,\n      responseText: 'Which service do you need?\\n\\n1. Cleaning (30 min)\\n2. First Visit (60 min)\\n3. Emergency (30 min)',\n      pendingBooking: { step: 'awaiting_service', date: ctx.extracted.date }\n    }\n  }];\n}\n\nif (slots.length === 0) {\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: false,\n      responseText: 'Sorry, no available slots on ' + ctx.extracted.date + '. Would you like to try a different date?',\n      pendingBooking: null\n    }\n  }];\n}\n\nconst topSlots = slots.slice(0, 3);\nconst isReschedule = ctx.pendingBooking && ctx.pendingBooking.existingAppointmentId;\n\n// ── preferred time matching (only for fresh bookings, not reschedule) ──────────\nconst preferredTime = ctx.extracted.time || null;\nlet matchedSlot = null;\n\nif (preferredTime && !isReschedule) {\n  let normalizedTime = null;\n\n  // \"9am\", \"10am\", \"9:00am\"\n  const ampmMatch = preferredTime.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/i);\n  // \"09:00\", \"9:00\", \"9.30\"\n  const colonMatch = preferredTime.match(/(\\d{1,2})[.:](\\d{2})/);\n  // bare hour: \"9\", \"10\"\n  const hourMatch = preferredTime.match(/^(\\d{1,2})$/);\n\n  if (ampmMatch) {\n    normalizedTime = ampmMatch[1].padStart(2, '0') + ':' + (ampmMatch[2] || '00');\n  } else if (colonMatch) {\n    normalizedTime = colonMatch[1].padStart(2, '0') + ':' + colonMatch[2];\n  } else if (hourMatch) {\n    normalizedTime = hourMatch[1].padStart(2, '0') + ':00';\n  }\n\n  if (normalizedTime) {\n    matchedSlot = slots.find(s => s.time === normalizedTime) || null;\n  }\n}\n\nif (matchedSlot) {\n  // Auto-book: return data shaped for Create Calendar Event, skip slot selection\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: true,\n      selectedSlot: matchedSlot,\n      extracted: { ...ctx.extracted, time: matchedSlot.time },\n      pendingBooking: null\n    }\n  }];\n}\n\n// ── build slot options message ─────────────────────────────────────────────────\nlet msg = '';\nif (preferredTime && !isReschedule) {\n  msg += 'Sorry, *' + preferredTime + '* is not available on ' + ctx.extracted.date + '.\\n\\n';\n}\n\nmsg += 'Available slots for *' + ctx.extracted.service + '* on *' + ctx.extracted.date + '*:\\n\\n';\ntopSlots.forEach(function(slot, i) {\n  msg += (i + 1) + '. ' + slot.time + '\\n';\n});\nmsg += '\\nReply with *1*, *2*, or *3* to confirm your appointment.';\n\nconst newPendingBooking = {\n  service: ctx.extracted.service,\n  date: ctx.extracted.date,\n  name: ctx.extracted.name || ctx.name,\n  phone: ctx.from,\n  slots: topSlots,\n  step: 'awaiting_slot_selection'\n};\n\nif (isReschedule) {\n  newPendingBooking.existingAppointmentId = ctx.pendingBooking.existingAppointmentId;\n  newPendingBooking.existingCalendarEventId = ctx.pendingBooking.existingCalendarEventId;\n  newPendingBooking.isReschedule = true;\n}\n\nreturn [{\n  json: {\n    ...ctx,\n    autoBooked: false,\n    responseText: msg,\n    pendingBooking: newPendingBooking\n  }\n}];"
       },
       "id": "appt-n016",
       "name": "Format Slot Options",
@@ -489,7 +489,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('Handle Confirmation').item.json;\nconst result = $input.first().json;\n\nconst confirmMsg = `? *Appointment Confirmed!*\\n\\n` +\n  `?? Service: ${ctx.pending.service}\\n` +\n  `?? Date: ${ctx.pending.date}\\n` +\n  `? Time: ${ctx.selectedSlot.time}\\n` +\n  `?? Name: ${ctx.pending.name}\\n` +\n  `?? Phone: ${ctx.from}\\n\\n` +\n  `You will receive a reminder 24 hours and 2 hours before your appointment.\\n\\n` +\n  `To reschedule or cancel, just message us here.`;\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: confirmMsg,\n    pendingBooking: null,\n    calendarEventId: result.eventId || result.id || null\n  }\n}];"
+        "jsCode": "// Try Handle Confirmation (normal path), fall back to Format Slot Options (auto-book path)\nlet ctx;\ntry {\n  const hc = $('Handle Confirmation').item.json;\n  if (!hc || !hc.pending || !hc.selectedSlot) throw new Error('no data');\n  ctx = hc;\n} catch(e) {\n  const fso = $('Format Slot Options').item.json;\n  ctx = {\n    ...fso,\n    pending: {\n      service: fso.extracted.service,\n      date: fso.extracted.date,\n      name: fso.extracted.name || fso.name\n    },\n    selectedSlot: fso.selectedSlot\n  };\n}\n\nconst result = $input.first().json;\n\nconst confirmMsg = `✅ *Appointment Confirmed!*\\n\\n` +\n  `🦷 Service: ${ctx.pending.service}\\n` +\n  `📅 Date: ${ctx.pending.date}\\n` +\n  `⏰ Time: ${ctx.selectedSlot.time}\\n` +\n  `👤 Name: ${ctx.pending.name}\\n` +\n  `📞 Phone: ${ctx.from}\\n\\n` +\n  `You will receive a reminder 24 hours and 2 hours before your appointment.\\n\\n` +\n  `To reschedule or cancel, just message us here.`;\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: confirmMsg,\n    pendingBooking: null,\n    calendarEventId: result.eventId || result.id || null\n  }\n}];"
       },
       "id": "appt-n024",
       "name": "Format Booking Confirmed",
@@ -800,6 +800,26 @@
         1952,
         16
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.autoBooked }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "appt-autobook-001",
+      "name": "Auto Book?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        3552,
+        0
+      ]
     }
   ],
   "connections": {
@@ -1002,7 +1022,7 @@
       "main": [
         [
           {
-            "node": "Save Conversation Prep",
+            "node": "Auto Book?",
             "type": "main",
             "index": 0
           }
@@ -1273,6 +1293,24 @@
         [
           {
             "node": "Get Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto Book?": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Conversation Prep",
             "type": "main",
             "index": 0
           }
