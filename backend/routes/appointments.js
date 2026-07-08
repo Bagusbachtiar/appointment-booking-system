@@ -34,6 +34,37 @@ router.get('/by-phone/:phone', (req, res) => {
   }
 });
 
+// GET /api/appointments/upcoming/:phone — all future confirmed appointments for a phone number
+router.get('/upcoming/:phone', (req, res) => {
+  try {
+    const { phone } = req.params;
+    const db = getDb();
+    const today = new Date().toISOString().slice(0, 10);
+    const appts = db.prepare(`
+      SELECT * FROM appointments
+      WHERE phone = ? AND status = 'confirmed' AND date >= ?
+      ORDER BY date ASC, time ASC
+      LIMIT 10
+    `).all(phone, today);
+
+    res.json(appts.map(a => ({
+      id: a.id,
+      phone: a.phone,
+      name: a.name,
+      service: a.service,
+      date: a.date,
+      time: a.time,
+      duration: a.duration,
+      calendarEventId: a.calendar_event_id,
+      status: a.status,
+      notes: a.notes
+    })));
+  } catch (e) {
+    console.error('[upcoming]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/appointments — admin dashboard data
 router.get('/', (req, res) => {
   try {

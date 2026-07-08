@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-04T08:56:46.199Z",
+  "updatedAt": "2026-07-08T04:53:50.887Z",
   "createdAt": "2026-06-30T16:01:25.986Z",
   "id": "2fyrX7SJFdRUNh9f",
   "name": "WhatsApp appointment booking automation",
@@ -198,7 +198,7 @@
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
-        1552,
+        1616,
         304
       ],
       "credentials": {
@@ -220,7 +220,7 @@
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
-        1760,
+        1808,
         304
       ],
       "credentials": {
@@ -245,7 +245,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - handles typed (1/2/3), time strings, am/pm, ordinals EN+ID\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const slots = ctx.pendingBooking.slots || [];\n  const txt = ctx.text.trim().toLowerCase();\n  let slotIndex = -1;\n\n  // Numeric: 1, 2, 3\n  const num = parseInt(txt);\n  if (num >= 1 && num <= slots.length) slotIndex = num - 1;\n\n  // Number > 3: treat as time hour (e.g. \"9\" = 09:00, \"10\" = 10:00)\n  if (slotIndex < 0 && !isNaN(num) && num >= 1 && num <= 23) {\n    const hh = String(num).padStart(2, '0');\n    slotIndex = slots.findIndex(s => s.time === hh + ':00');\n    if (slotIndex < 0) slotIndex = slots.findIndex(s => s.time === hh + ':30');\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (slotIndex < 0) {\n    const tm = txt.match(/(d{1,2})[.:](d{2})/);\n    if (tm) {\n      const timeStr = tm[1].padStart(2, '0') + ':' + tm[2];\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (slotIndex < 0) {\n    const ampm = txt.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) {\n      const timeStr = ampm[1].padStart(2, '0') + ':' + (ampm[2] || '00');\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Spoken time — full EN + ID lookup table\n  if (slotIndex < 0) {\n    const hourMap = {\n      // English\n      'one': '01', 'two': '02', 'three': '03', 'four': '04',\n      'five': '05', 'six': '06', 'seven': '07', 'eight': '08',\n      'nine': '09', 'ten': '10', 'eleven': '11', 'twelve': '12',\n      // Indonesian\n      'satu': '01', 'dua': '02', 'tiga': '03', 'empat': '04',\n      'lima': '05', 'enam': '06', 'tujuh': '07', 'delapan': '08',\n      'sembilan': '09', 'sepuluh': '10', 'sebelas': '11', 'dua belas': '12'\n    };\n    const minuteMap = {\n      'thirty': '30', 'half': '30', 'tiga puluh': '30',\n      'fifteen': '15', 'quarter': '15', 'lima belas': '15',\n      'forty five': '45', 'empat puluh lima': '45'\n    };\n    // setengah X = half past (X-1) in Indonesian: \"setengah sepuluh\" = 09:30\n    const setengahMap = {\n      'dua': '01', 'tiga': '02', 'empat': '03', 'lima': '04',\n      'enam': '05', 'tujuh': '06', 'delapan': '07', 'sembilan': '08',\n      'sepuluh': '09', 'sebelas': '10', 'dua belas': '11'\n    };\n    // Check \"setengah X\" first (Indonesian half-past)\n    const setengahMatch = txt.match(/setengah\\s+(\\w+(?:\\s+\\w+)?)/);\n    if (setengahMatch) {\n      const nextWord = setengahMatch[1];\n      if (setengahMap[nextWord]) slotIndex = slots.findIndex(s => s.time === setengahMap[nextWord] + ':30');\n    }\n    // Check hour word + optional minute word\n    if (slotIndex < 0) {\n      let hour = null, minute = '00';\n      // Try two-word hours first (dua belas, etc.)\n      for (const [word, h] of Object.entries(hourMap)) {\n        if (txt.includes(word)) { hour = h; break; }\n      }\n      if (hour) {\n        for (const [word, m] of Object.entries(minuteMap)) {\n          if (txt.includes(word)) { minute = m; break; }\n        }\n        slotIndex = slots.findIndex(s => s.time === hour + ':' + minute);\n      }\n    }\n  }\n\n    // Ordinals — English + Indonesian\n  if (slotIndex < 0) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','two','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','three','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => txt.includes(k))) { slotIndex = i; break; }\n    }\n  }\n\n  if (slotIndex >= 0) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: slotIndex, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst todayDate = new Date();\nconst today = todayDate.toISOString().slice(0, 10);\nconst dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\nconst todayFull = dayNames[todayDate.getDay()] + ', ' + today;\n\n// Pre-compute next 7 days with explicit day-name → date mapping (so LLM doesn't need to calculate)\nconst dateMap = [];\nfor (let i = 1; i <= 7; i++) {\n  const d = new Date(todayDate);\n  d.setDate(todayDate.getDate() + i);\n  const iso = d.toISOString().slice(0, 10);\n  const label = i === 1 ? 'Tomorrow' : dayNames[d.getDay()];\n  dateMap.push('- ' + label + ': ' + iso);\n}\nconst upcomingDays = dateMap.join('\\n');\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + todayFull + \".\\n\" +\n      \"Upcoming dates:\\n\" + upcomingDays + \"\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + todayFull + \"\\n\" +\n  \"- Write reply in friendly conversational tone\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
+        "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - handles typed (1/2/3), time strings, am/pm, ordinals EN+ID\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const slots = ctx.pendingBooking.slots || [];\n  const txt = ctx.text.trim().toLowerCase();\n  let slotIndex = -1;\n\n  // Numeric: 1, 2, 3\n  const num = parseInt(txt);\n  if (num >= 1 && num <= slots.length) slotIndex = num - 1;\n\n  // Number > 3: treat as time hour (e.g. \"9\" = 09:00, \"10\" = 10:00)\n  if (slotIndex < 0 && !isNaN(num) && num >= 1 && num <= 23) {\n    const hh = String(num).padStart(2, '0');\n    slotIndex = slots.findIndex(s => s.time === hh + ':00');\n    if (slotIndex < 0) slotIndex = slots.findIndex(s => s.time === hh + ':30');\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (slotIndex < 0) {\n    const tm = txt.match(/(d{1,2})[.:](d{2})/);\n    if (tm) {\n      const timeStr = tm[1].padStart(2, '0') + ':' + tm[2];\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (slotIndex < 0) {\n    const ampm = txt.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) {\n      const timeStr = ampm[1].padStart(2, '0') + ':' + (ampm[2] || '00');\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Spoken time — full EN + ID lookup table\n  if (slotIndex < 0) {\n    const hourMap = {\n      // English\n      'one': '01', 'two': '02', 'three': '03', 'four': '04',\n      'five': '05', 'six': '06', 'seven': '07', 'eight': '08',\n      'nine': '09', 'ten': '10', 'eleven': '11', 'twelve': '12',\n      // Indonesian\n      'satu': '01', 'dua': '02', 'tiga': '03', 'empat': '04',\n      'lima': '05', 'enam': '06', 'tujuh': '07', 'delapan': '08',\n      'sembilan': '09', 'sepuluh': '10', 'sebelas': '11', 'dua belas': '12'\n    };\n    const minuteMap = {\n      'thirty': '30', 'half': '30', 'tiga puluh': '30',\n      'fifteen': '15', 'quarter': '15', 'lima belas': '15',\n      'forty five': '45', 'empat puluh lima': '45'\n    };\n    // setengah X = half past (X-1) in Indonesian: \"setengah sepuluh\" = 09:30\n    const setengahMap = {\n      'dua': '01', 'tiga': '02', 'empat': '03', 'lima': '04',\n      'enam': '05', 'tujuh': '06', 'delapan': '07', 'sembilan': '08',\n      'sepuluh': '09', 'sebelas': '10', 'dua belas': '11'\n    };\n    // Check \"setengah X\" first (Indonesian half-past)\n    const setengahMatch = txt.match(/setengah\\s+(\\w+(?:\\s+\\w+)?)/);\n    if (setengahMatch) {\n      const nextWord = setengahMatch[1];\n      if (setengahMap[nextWord]) slotIndex = slots.findIndex(s => s.time === setengahMap[nextWord] + ':30');\n    }\n    // Check hour word + optional minute word\n    if (slotIndex < 0) {\n      let hour = null, minute = '00';\n      // Try two-word hours first (dua belas, etc.)\n      for (const [word, h] of Object.entries(hourMap)) {\n        if (txt.includes(word)) { hour = h; break; }\n      }\n      if (hour) {\n        for (const [word, m] of Object.entries(minuteMap)) {\n          if (txt.includes(word)) { minute = m; break; }\n        }\n        slotIndex = slots.findIndex(s => s.time === hour + ':' + minute);\n      }\n    }\n  }\n\n    // Ordinals — English + Indonesian\n  if (slotIndex < 0) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','two','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','three','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => txt.includes(k))) { slotIndex = i; break; }\n    }\n  }\n\n  if (slotIndex >= 0) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: slotIndex, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst todayDate = new Date();\nconst today = todayDate.toISOString().slice(0, 10);\nconst dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\nconst todayFull = dayNames[todayDate.getDay()] + ', ' + today;\n\n// Pre-compute next 7 days with explicit day-name → date mapping (so LLM doesn't need to calculate)\nconst dateMap = [];\nfor (let i = 1; i <= 7; i++) {\n  const d = new Date(todayDate);\n  d.setDate(todayDate.getDate() + i);\n  const iso = d.toISOString().slice(0, 10);\n  const label = i === 1 ? 'Tomorrow' : dayNames[d.getDay()];\n  dateMap.push('- ' + label + ': ' + iso);\n}\nconst upcomingDays = dateMap.join('\\n');\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + todayFull + \".\\n\" +\n      \"Upcoming dates:\\n\" + upcomingDays + \"\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + todayFull + \"\\n\" +\n  \"- Use list_appointments intent when user asks about their existing appointments — e.g. 'what is my appointment', 'my appointment', 'show my bookings', 'do I have appointments', 'what time is my appointment', 'check my schedule'\\n\" +\n  \"- Write reply in friendly conversational tone\\n\" +\n  \"- When user says thanks/ok/bye after a completed booking, reply with a short warm closing only — do NOT prompt to book/reschedule/cancel\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
       },
       "id": "appt-n011",
       "name": "Build Ollama Request",
@@ -315,10 +315,16 @@
             },
             {
               "value2": "confirmation"
+            },
+            {
+              "value2": "list_appointments"
+            },
+            {
+              "value2": "unclear"
             }
           ]
         },
-        "fallbackOutput": "extra"
+        "fallbackOutput": 5
       },
       "id": "appt-n014",
       "name": "Route by Intent",
@@ -380,8 +386,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        3088,
-        608
+        3120,
+        528
       ]
     },
     {
@@ -393,8 +399,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3312,
-        608
+        3328,
+        528
       ]
     },
     {
@@ -530,7 +536,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ctx = $('Parse Intent Response').item.json;\n\nconst defaultMsg = 'Hi! ?? I can help you with:\\n\\n?? *Book* an appointment\\n?? *Reschedule* your appointment\\n? *Cancel* your appointment\\n\\nWhat would you like to do?';\n\nreturn [{\n  json: {\n    ...ctx,\n    responseText: ctx.aiReply || defaultMsg,\n    pendingBooking: ctx.pendingBooking\n  }\n}];"
+        "jsCode": "const ctx = $input.first().json;\n\nconst defaultMsg = 'Hi! I can help you with:\\n\\n🦷 *Book* an appointment\\n📅 *Reschedule* your appointment\\n❌ *Cancel* your appointment\\n\\nWhat would you like to do?';\n\nreturn [{\n  json: {\n    ...ctx,\n    responseText: ctx.aiReply || defaultMsg,\n    pendingBooking: ctx.pendingBooking || null\n  }\n}];"
       },
       "id": "appt-n027",
       "name": "Format Unclear Response",
@@ -692,7 +698,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
       "position": [
-        1376,
+        1424,
         304
       ]
     },
@@ -708,7 +714,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1472,
+        1536,
         16
       ],
       "credentials": {
@@ -736,7 +742,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1648,
+        1664,
         16
       ],
       "credentials": {
@@ -819,6 +825,33 @@
       "position": [
         3552,
         0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/api/appointments/upcoming/' + $json.from }}",
+        "options": {}
+      },
+      "id": "appt-list-001",
+      "name": "Fetch Appointments List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3104,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nconst appts = $input.first().json;\n\nlet msg = '';\nif (!Array.isArray(appts) || appts.length === 0) {\n  msg = \"You don't have any upcoming appointments. Would you like to book one?\";\n} else {\n  msg = '*Your Upcoming Appointments:*\\n\\n';\n  appts.forEach(function(a, i) {\n    msg += (i + 1) + '. 🦷 *' + a.service + '*\\n';\n    msg += '   📅 ' + a.date + ' at ⏰ ' + a.time + '\\n';\n    if (i < appts.length - 1) msg += '\\n';\n  });\n  msg += '\\nTo reschedule or cancel, just let me know!';\n}\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: msg,\n    pendingBooking: ctx.pendingBooking || null\n  }\n}];"
+      },
+      "id": "appt-list-002",
+      "name": "Format Appointments List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3328,
+        704
       ]
     }
   ],
@@ -994,6 +1027,13 @@
         [
           {
             "node": "Handle Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Appointments List",
             "type": "main",
             "index": 0
           }
@@ -1316,6 +1356,28 @@
           }
         ]
       ]
+    },
+    "Fetch Appointments List": {
+      "main": [
+        [
+          {
+            "node": "Format Appointments List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Appointments List": {
+      "main": [
+        [
+          {
+            "node": "Save Conversation Prep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -1329,9 +1391,9 @@
     "templateCredsSetupCompleted": true
   },
   "pinData": {},
-  "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
-  "activeVersionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
-  "versionCounter": 118,
+  "versionId": "cff2fbe6-9e70-48c6-9b88-e5d34f57f700",
+  "activeVersionId": "cff2fbe6-9e70-48c6-9b88-e5d34f57f700",
+  "versionCounter": 158,
   "triggerCount": 1,
   "shared": [
     {
@@ -1354,9 +1416,9 @@
   ],
   "tags": [],
   "activeVersion": {
-    "updatedAt": "2026-07-04T08:56:46.201Z",
-    "createdAt": "2026-07-04T08:56:46.201Z",
-    "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
+    "updatedAt": "2026-07-08T04:53:50.888Z",
+    "createdAt": "2026-07-08T04:53:50.888Z",
+    "versionId": "cff2fbe6-9e70-48c6-9b88-e5d34f57f700",
     "workflowId": "2fyrX7SJFdRUNh9f",
     "nodes": [
       {
@@ -1550,7 +1612,7 @@
         "type": "n8n-nodes-base.redis",
         "typeVersion": 1,
         "position": [
-          1552,
+          1616,
           304
         ],
         "credentials": {
@@ -1572,7 +1634,7 @@
         "type": "n8n-nodes-base.redis",
         "typeVersion": 1,
         "position": [
-          1760,
+          1808,
           304
         ],
         "credentials": {
@@ -1597,7 +1659,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - handles typed (1/2/3), time strings, am/pm, ordinals EN+ID\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const slots = ctx.pendingBooking.slots || [];\n  const txt = ctx.text.trim().toLowerCase();\n  let slotIndex = -1;\n\n  // Numeric: 1, 2, 3\n  const num = parseInt(txt);\n  if (num >= 1 && num <= slots.length) slotIndex = num - 1;\n\n  // Number > 3: treat as time hour (e.g. \"9\" = 09:00, \"10\" = 10:00)\n  if (slotIndex < 0 && !isNaN(num) && num >= 1 && num <= 23) {\n    const hh = String(num).padStart(2, '0');\n    slotIndex = slots.findIndex(s => s.time === hh + ':00');\n    if (slotIndex < 0) slotIndex = slots.findIndex(s => s.time === hh + ':30');\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (slotIndex < 0) {\n    const tm = txt.match(/(d{1,2})[.:](d{2})/);\n    if (tm) {\n      const timeStr = tm[1].padStart(2, '0') + ':' + tm[2];\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (slotIndex < 0) {\n    const ampm = txt.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) {\n      const timeStr = ampm[1].padStart(2, '0') + ':' + (ampm[2] || '00');\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Spoken time — full EN + ID lookup table\n  if (slotIndex < 0) {\n    const hourMap = {\n      // English\n      'one': '01', 'two': '02', 'three': '03', 'four': '04',\n      'five': '05', 'six': '06', 'seven': '07', 'eight': '08',\n      'nine': '09', 'ten': '10', 'eleven': '11', 'twelve': '12',\n      // Indonesian\n      'satu': '01', 'dua': '02', 'tiga': '03', 'empat': '04',\n      'lima': '05', 'enam': '06', 'tujuh': '07', 'delapan': '08',\n      'sembilan': '09', 'sepuluh': '10', 'sebelas': '11', 'dua belas': '12'\n    };\n    const minuteMap = {\n      'thirty': '30', 'half': '30', 'tiga puluh': '30',\n      'fifteen': '15', 'quarter': '15', 'lima belas': '15',\n      'forty five': '45', 'empat puluh lima': '45'\n    };\n    // setengah X = half past (X-1) in Indonesian: \"setengah sepuluh\" = 09:30\n    const setengahMap = {\n      'dua': '01', 'tiga': '02', 'empat': '03', 'lima': '04',\n      'enam': '05', 'tujuh': '06', 'delapan': '07', 'sembilan': '08',\n      'sepuluh': '09', 'sebelas': '10', 'dua belas': '11'\n    };\n    // Check \"setengah X\" first (Indonesian half-past)\n    const setengahMatch = txt.match(/setengah\\s+(\\w+(?:\\s+\\w+)?)/);\n    if (setengahMatch) {\n      const nextWord = setengahMatch[1];\n      if (setengahMap[nextWord]) slotIndex = slots.findIndex(s => s.time === setengahMap[nextWord] + ':30');\n    }\n    // Check hour word + optional minute word\n    if (slotIndex < 0) {\n      let hour = null, minute = '00';\n      // Try two-word hours first (dua belas, etc.)\n      for (const [word, h] of Object.entries(hourMap)) {\n        if (txt.includes(word)) { hour = h; break; }\n      }\n      if (hour) {\n        for (const [word, m] of Object.entries(minuteMap)) {\n          if (txt.includes(word)) { minute = m; break; }\n        }\n        slotIndex = slots.findIndex(s => s.time === hour + ':' + minute);\n      }\n    }\n  }\n\n    // Ordinals — English + Indonesian\n  if (slotIndex < 0) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','two','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','three','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => txt.includes(k))) { slotIndex = i; break; }\n    }\n  }\n\n  if (slotIndex >= 0) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: slotIndex, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst todayDate = new Date();\nconst today = todayDate.toISOString().slice(0, 10);\nconst dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\nconst todayFull = dayNames[todayDate.getDay()] + ', ' + today;\n\n// Pre-compute next 7 days with explicit day-name → date mapping (so LLM doesn't need to calculate)\nconst dateMap = [];\nfor (let i = 1; i <= 7; i++) {\n  const d = new Date(todayDate);\n  d.setDate(todayDate.getDate() + i);\n  const iso = d.toISOString().slice(0, 10);\n  const label = i === 1 ? 'Tomorrow' : dayNames[d.getDay()];\n  dateMap.push('- ' + label + ': ' + iso);\n}\nconst upcomingDays = dateMap.join('\\n');\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + todayFull + \".\\n\" +\n      \"Upcoming dates:\\n\" + upcomingDays + \"\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + todayFull + \"\\n\" +\n  \"- Write reply in friendly conversational tone\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
+          "jsCode": "const ctx = $input.first().json;\n\n// Hard-code slot selection - handles typed (1/2/3), time strings, am/pm, ordinals EN+ID\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_slot_selection') {\n  const slots = ctx.pendingBooking.slots || [];\n  const txt = ctx.text.trim().toLowerCase();\n  let slotIndex = -1;\n\n  // Numeric: 1, 2, 3\n  const num = parseInt(txt);\n  if (num >= 1 && num <= slots.length) slotIndex = num - 1;\n\n  // Number > 3: treat as time hour (e.g. \"9\" = 09:00, \"10\" = 10:00)\n  if (slotIndex < 0 && !isNaN(num) && num >= 1 && num <= 23) {\n    const hh = String(num).padStart(2, '0');\n    slotIndex = slots.findIndex(s => s.time === hh + ':00');\n    if (slotIndex < 0) slotIndex = slots.findIndex(s => s.time === hh + ':30');\n  }\n\n  // Time with colon or dot: 09:00, 9:00, 9.30\n  if (slotIndex < 0) {\n    const tm = txt.match(/(d{1,2})[.:](d{2})/);\n    if (tm) {\n      const timeStr = tm[1].padStart(2, '0') + ':' + tm[2];\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Time with am/pm: 9am, 9 am, 10am\n  if (slotIndex < 0) {\n    const ampm = txt.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/);\n    if (ampm) {\n      const timeStr = ampm[1].padStart(2, '0') + ':' + (ampm[2] || '00');\n      slotIndex = slots.findIndex(s => s.time === timeStr);\n    }\n  }\n\n  // Spoken time — full EN + ID lookup table\n  if (slotIndex < 0) {\n    const hourMap = {\n      // English\n      'one': '01', 'two': '02', 'three': '03', 'four': '04',\n      'five': '05', 'six': '06', 'seven': '07', 'eight': '08',\n      'nine': '09', 'ten': '10', 'eleven': '11', 'twelve': '12',\n      // Indonesian\n      'satu': '01', 'dua': '02', 'tiga': '03', 'empat': '04',\n      'lima': '05', 'enam': '06', 'tujuh': '07', 'delapan': '08',\n      'sembilan': '09', 'sepuluh': '10', 'sebelas': '11', 'dua belas': '12'\n    };\n    const minuteMap = {\n      'thirty': '30', 'half': '30', 'tiga puluh': '30',\n      'fifteen': '15', 'quarter': '15', 'lima belas': '15',\n      'forty five': '45', 'empat puluh lima': '45'\n    };\n    // setengah X = half past (X-1) in Indonesian: \"setengah sepuluh\" = 09:30\n    const setengahMap = {\n      'dua': '01', 'tiga': '02', 'empat': '03', 'lima': '04',\n      'enam': '05', 'tujuh': '06', 'delapan': '07', 'sembilan': '08',\n      'sepuluh': '09', 'sebelas': '10', 'dua belas': '11'\n    };\n    // Check \"setengah X\" first (Indonesian half-past)\n    const setengahMatch = txt.match(/setengah\\s+(\\w+(?:\\s+\\w+)?)/);\n    if (setengahMatch) {\n      const nextWord = setengahMatch[1];\n      if (setengahMap[nextWord]) slotIndex = slots.findIndex(s => s.time === setengahMap[nextWord] + ':30');\n    }\n    // Check hour word + optional minute word\n    if (slotIndex < 0) {\n      let hour = null, minute = '00';\n      // Try two-word hours first (dua belas, etc.)\n      for (const [word, h] of Object.entries(hourMap)) {\n        if (txt.includes(word)) { hour = h; break; }\n      }\n      if (hour) {\n        for (const [word, m] of Object.entries(minuteMap)) {\n          if (txt.includes(word)) { minute = m; break; }\n        }\n        slotIndex = slots.findIndex(s => s.time === hour + ':' + minute);\n      }\n    }\n  }\n\n    // Ordinals — English + Indonesian\n  if (slotIndex < 0) {\n    const ordMap = [\n      ['first','one','satu','pertama','1st'],\n      ['second','two','dua','kedua','2nd','nomor 2','no 2','number 2'],\n      ['third','three','tiga','ketiga','3rd','nomor 3','no 3','number 3']\n    ];\n    for (let i = 0; i < ordMap.length; i++) {\n      if (i < slots.length && ordMap[i].some(k => txt.includes(k))) { slotIndex = i; break; }\n    }\n  }\n\n  if (slotIndex >= 0) {\n    return [{ json: Object.assign({}, ctx, { _slotIndex: slotIndex, ollamaBody: null }) }];\n  }\n}\n\n// Hard-code cancel confirmation reply - don't send to LLM, avoids \"yes\" being misclassified as intent=cancel again\nif (ctx.pendingBooking && ctx.pendingBooking.step === 'awaiting_cancel_confirmation') {\n  return [{ json: Object.assign({}, ctx, { _cancelConfirm: true, ollamaBody: null }) }];\n}\n\nconst todayDate = new Date();\nconst today = todayDate.toISOString().slice(0, 10);\nconst dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\nconst todayFull = dayNames[todayDate.getDay()] + ', ' + today;\n\n// Pre-compute next 7 days with explicit day-name → date mapping (so LLM doesn't need to calculate)\nconst dateMap = [];\nfor (let i = 1; i <= 7; i++) {\n  const d = new Date(todayDate);\n  d.setDate(todayDate.getDate() + i);\n  const iso = d.toISOString().slice(0, 10);\n  const label = i === 1 ? 'Tomorrow' : dayNames[d.getDay()];\n  dateMap.push('- ' + label + ': ' + iso);\n}\nconst upcomingDays = dateMap.join('\\n');\n\nconst systemPrompt = \"You are an appointment booking assistant for Bright Smile Dental Clinic.\\n\" +\n  \"Today is \" + todayFull + \".\\n\" +\n      \"Upcoming dates:\\n\" + upcomingDays + \"\\n\\n\" +\n  \"Services available:\\n\" +\n  \"- Cleaning (30 minutes)\\n\" +\n  \"- First Visit (60 minutes)\\n\" +\n  \"- Emergency (30 minutes)\\n\\n\" +\n  \"Business hours: Monday-Friday, 9:00 AM - 5:00 PM\\n\\n\" +\n  \"Current pending booking context: \" + JSON.stringify(ctx.pendingBooking || null) + \"\\n\" +\n  \"Recent conversation (last 6 messages): \" + JSON.stringify(ctx.conversation.slice(-6)) + \"\\n\\n\" +\n  \"Analyze the user message and respond ONLY with valid JSON:\\n\" +\n  \"{\\n\" +\n  \"  \\\"intent\\\": \\\"booking\\\" | \\\"reschedule\\\" | \\\"cancel\\\" | \\\"confirmation\\\" | \\\"unclear\\\",\\n\" +\n  \"  \\\"service\\\": \\\"Cleaning\\\" | \\\"First Visit\\\" | \\\"Emergency\\\" | null,\\n\" +\n  \"  \\\"date\\\": \\\"YYYY-MM-DD\\\" | null,\\n\" +\n  \"  \\\"time\\\": \\\"HH:MM\\\" | null,\\n\" +\n  \"  \\\"name\\\": null,\\n\" +\n  \"  \\\"notes\\\": null,\\n\" +\n  \"  \\\"confidence\\\": 0.0,\\n\" +\n  \"  \\\"reply\\\": \\\"\\\"\\n\" +\n  \"}\\n\\n\" +\n  \"Rules:\\n\" +\n  \"- Always resolve relative dates (next Monday, tomorrow) using today: \" + todayFull + \"\\n\" +\n  \"- Use list_appointments intent when user asks about their existing appointments — e.g. 'what is my appointment', 'my appointment', 'show my bookings', 'do I have appointments', 'what time is my appointment', 'check my schedule'\\n\" +\n  \"- Write reply in friendly conversational tone\\n\" +\n  \"- When user says thanks/thank you/ok/great/bye after a completed booking, reply ONLY with a short warm closing (e.g. You're welcome! See you at your appointment.) — do NOT prompt them to book/reschedule/cancel\n- When user says thanks/thank you/ok/great/bye/done after a booking is confirmed (check conversation history), reply ONLY with a short warm closing like \"You're welcome! See you at your appointment. Feel free to message us if you need anything.\" — do NOT ask them to book/reschedule/cancel again\";\n\nconst requestBody = {\n  model: 'llama3:latest',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: ctx.text }\n  ],\n  format: 'json',\n  stream: false\n};\n\nreturn [{ json: Object.assign({}, ctx, { ollamaBody: JSON.stringify(requestBody) }) }];\n"
         },
         "id": "appt-n011",
         "name": "Build Ollama Request",
@@ -1667,10 +1729,16 @@
               },
               {
                 "value2": "confirmation"
+              },
+              {
+                "value2": "list_appointments"
+              },
+              {
+                "value2": "unclear"
               }
             ]
           },
-          "fallbackOutput": "extra"
+          "fallbackOutput": 5
         },
         "id": "appt-n014",
         "name": "Route by Intent",
@@ -1711,7 +1779,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst result = $input.first().json;\nconst slots = result.slots || [];\n\nif (!ctx.extracted.date) {\n  return [{\n    json: {\n      ...ctx,\n      responseText: ctx.aiReply || 'What date would you like to book? (e.g. Monday July 7)',\n      pendingBooking: { ...ctx.pendingBooking, service: ctx.extracted.service, step: 'awaiting_date' }\n    }\n  }];\n}\n\nif (!ctx.extracted.service) {\n  return [{\n    json: {\n      ...ctx,\n      responseText: 'Which service do you need?\\n\\n1. Cleaning (30 min)\\n2. First Visit (60 min)\\n3. Emergency (30 min)',\n      pendingBooking: { step: 'awaiting_service', date: ctx.extracted.date }\n    }\n  }];\n}\n\nif (slots.length === 0) {\n  return [{\n    json: {\n      ...ctx,\n      responseText: 'Sorry, no available slots on ' + ctx.extracted.date + '. Would you like to try a different date?',\n      pendingBooking: null\n    }\n  }];\n}\n\nconst topSlots = slots.slice(0, 3);\nconst isReschedule = ctx.pendingBooking && ctx.pendingBooking.existingAppointmentId;\n\nlet msg = 'Available slots for *' + ctx.extracted.service + '* on *' + ctx.extracted.date + '*:\\n\\n';\ntopSlots.forEach(function(slot, i) {\n  msg += (i + 1) + '. ' + slot.time + '\\n';\n});\nmsg += '\\nReply with *1*, *2*, or *3* to confirm your appointment.';\n\nconst newPendingBooking = {\n  service: ctx.extracted.service,\n  date: ctx.extracted.date,\n  name: ctx.extracted.name || ctx.name,\n  phone: ctx.from,\n  slots: topSlots,\n  step: 'awaiting_slot_selection'\n};\n\n// Preserve reschedule context if present\nif (isReschedule) {\n  newPendingBooking.existingAppointmentId = ctx.pendingBooking.existingAppointmentId;\n  newPendingBooking.existingCalendarEventId = ctx.pendingBooking.existingCalendarEventId;\n  newPendingBooking.isReschedule = true;\n}\n\nreturn [{\n  json: {\n    ...ctx,\n    responseText: msg,\n    pendingBooking: newPendingBooking\n  }\n}];\n"
+          "jsCode": "const ctx = $('Parse Intent Response').item.json;\nconst result = $input.first().json;\nconst slots = result.slots || [];\n\nif (!ctx.extracted.date) {\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: false,\n      responseText: ctx.aiReply || 'What date would you like to book? (e.g. Monday July 7)',\n      pendingBooking: { ...ctx.pendingBooking, service: ctx.extracted.service, step: 'awaiting_date' }\n    }\n  }];\n}\n\nif (!ctx.extracted.service) {\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: false,\n      responseText: 'Which service do you need?\\n\\n1. Cleaning (30 min)\\n2. First Visit (60 min)\\n3. Emergency (30 min)',\n      pendingBooking: { step: 'awaiting_service', date: ctx.extracted.date }\n    }\n  }];\n}\n\nif (slots.length === 0) {\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: false,\n      responseText: 'Sorry, no available slots on ' + ctx.extracted.date + '. Would you like to try a different date?',\n      pendingBooking: null\n    }\n  }];\n}\n\nconst topSlots = slots.slice(0, 3);\nconst isReschedule = ctx.pendingBooking && ctx.pendingBooking.existingAppointmentId;\n\n// ── preferred time matching (only for fresh bookings, not reschedule) ──────────\nconst preferredTime = ctx.extracted.time || null;\nlet matchedSlot = null;\n\nif (preferredTime && !isReschedule) {\n  let normalizedTime = null;\n\n  // \"9am\", \"10am\", \"9:00am\"\n  const ampmMatch = preferredTime.match(/(\\d{1,2})(?::(\\d{2}))?\\s*am/i);\n  // \"09:00\", \"9:00\", \"9.30\"\n  const colonMatch = preferredTime.match(/(\\d{1,2})[.:](\\d{2})/);\n  // bare hour: \"9\", \"10\"\n  const hourMatch = preferredTime.match(/^(\\d{1,2})$/);\n\n  if (ampmMatch) {\n    normalizedTime = ampmMatch[1].padStart(2, '0') + ':' + (ampmMatch[2] || '00');\n  } else if (colonMatch) {\n    normalizedTime = colonMatch[1].padStart(2, '0') + ':' + colonMatch[2];\n  } else if (hourMatch) {\n    normalizedTime = hourMatch[1].padStart(2, '0') + ':00';\n  }\n\n  if (normalizedTime) {\n    matchedSlot = slots.find(s => s.time === normalizedTime) || null;\n  }\n}\n\nif (matchedSlot) {\n  // Auto-book: return data shaped for Create Calendar Event, skip slot selection\n  return [{\n    json: {\n      ...ctx,\n      autoBooked: true,\n      selectedSlot: matchedSlot,\n      extracted: { ...ctx.extracted, time: matchedSlot.time },\n      pendingBooking: null\n    }\n  }];\n}\n\n// ── build slot options message ─────────────────────────────────────────────────\nlet msg = '';\nif (preferredTime && !isReschedule) {\n  msg += 'Sorry, *' + preferredTime + '* is not available on ' + ctx.extracted.date + '.\\n\\n';\n}\n\nmsg += 'Available slots for *' + ctx.extracted.service + '* on *' + ctx.extracted.date + '*:\\n\\n';\ntopSlots.forEach(function(slot, i) {\n  msg += (i + 1) + '. ' + slot.time + '\\n';\n});\nmsg += '\\nReply with *1*, *2*, or *3* to confirm your appointment.';\n\nconst newPendingBooking = {\n  service: ctx.extracted.service,\n  date: ctx.extracted.date,\n  name: ctx.extracted.name || ctx.name,\n  phone: ctx.from,\n  slots: topSlots,\n  step: 'awaiting_slot_selection'\n};\n\nif (isReschedule) {\n  newPendingBooking.existingAppointmentId = ctx.pendingBooking.existingAppointmentId;\n  newPendingBooking.existingCalendarEventId = ctx.pendingBooking.existingCalendarEventId;\n  newPendingBooking.isReschedule = true;\n}\n\nreturn [{\n  json: {\n    ...ctx,\n    autoBooked: false,\n    responseText: msg,\n    pendingBooking: newPendingBooking\n  }\n}];"
         },
         "id": "appt-n016",
         "name": "Format Slot Options",
@@ -1732,8 +1800,8 @@
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          3088,
-          608
+          3120,
+          528
         ]
       },
       {
@@ -1745,8 +1813,8 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          3312,
-          608
+          3328,
+          528
         ]
       },
       {
@@ -1841,7 +1909,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const ctx = $('Handle Confirmation').item.json;\nconst result = $input.first().json;\n\nconst confirmMsg = `? *Appointment Confirmed!*\\n\\n` +\n  `?? Service: ${ctx.pending.service}\\n` +\n  `?? Date: ${ctx.pending.date}\\n` +\n  `? Time: ${ctx.selectedSlot.time}\\n` +\n  `?? Name: ${ctx.pending.name}\\n` +\n  `?? Phone: ${ctx.from}\\n\\n` +\n  `You will receive a reminder 24 hours and 2 hours before your appointment.\\n\\n` +\n  `To reschedule or cancel, just message us here.`;\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: confirmMsg,\n    pendingBooking: null,\n    calendarEventId: result.eventId || result.id || null\n  }\n}];"
+          "jsCode": "// Try Handle Confirmation (normal path), fall back to Format Slot Options (auto-book path)\nlet ctx;\ntry {\n  const hc = $('Handle Confirmation').item.json;\n  if (!hc || !hc.pending || !hc.selectedSlot) throw new Error('no data');\n  ctx = hc;\n} catch(e) {\n  const fso = $('Format Slot Options').item.json;\n  ctx = {\n    ...fso,\n    pending: {\n      service: fso.extracted.service,\n      date: fso.extracted.date,\n      name: fso.extracted.name || fso.name\n    },\n    selectedSlot: fso.selectedSlot\n  };\n}\n\nconst result = $input.first().json;\n\nconst confirmMsg = `✅ *Appointment Confirmed!*\\n\\n` +\n  `🦷 Service: ${ctx.pending.service}\\n` +\n  `📅 Date: ${ctx.pending.date}\\n` +\n  `⏰ Time: ${ctx.selectedSlot.time}\\n` +\n  `👤 Name: ${ctx.pending.name}\\n` +\n  `📞 Phone: ${ctx.from}\\n\\n` +\n  `You will receive a reminder 24 hours and 2 hours before your appointment.\\n\\n` +\n  `To reschedule or cancel, just message us here.`;\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: confirmMsg,\n    pendingBooking: null,\n    calendarEventId: result.eventId || result.id || null\n  }\n}];"
         },
         "id": "appt-n024",
         "name": "Format Booking Confirmed",
@@ -1882,7 +1950,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const ctx = $('Parse Intent Response').item.json;\n\nconst defaultMsg = 'Hi! ?? I can help you with:\\n\\n?? *Book* an appointment\\n?? *Reschedule* your appointment\\n? *Cancel* your appointment\\n\\nWhat would you like to do?';\n\nreturn [{\n  json: {\n    ...ctx,\n    responseText: ctx.aiReply || defaultMsg,\n    pendingBooking: ctx.pendingBooking\n  }\n}];"
+          "jsCode": "const ctx = $input.first().json;\n\nconst defaultMsg = 'Hi! I can help you with:\\n\\n🦷 *Book* an appointment\\n📅 *Reschedule* your appointment\\n❌ *Cancel* your appointment\\n\\nWhat would you like to do?';\n\nreturn [{\n  json: {\n    ...ctx,\n    responseText: ctx.aiReply || defaultMsg,\n    pendingBooking: ctx.pendingBooking || null\n  }\n}];"
         },
         "id": "appt-n027",
         "name": "Format Unclear Response",
@@ -2044,7 +2112,7 @@
         "type": "n8n-nodes-base.if",
         "typeVersion": 1,
         "position": [
-          1376,
+          1424,
           304
         ]
       },
@@ -2060,7 +2128,7 @@
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          1472,
+          1536,
           16
         ],
         "credentials": {
@@ -2088,7 +2156,7 @@
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          1648,
+          1664,
           16
         ],
         "credentials": {
@@ -2151,6 +2219,53 @@
         "position": [
           1952,
           16
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{ $json.autoBooked }}",
+                "value2": true
+              }
+            ]
+          }
+        },
+        "id": "appt-autobook-001",
+        "name": "Auto Book?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [
+          3552,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "url": "={{ 'http://host.docker.internal:3000/api/appointments/upcoming/' + $json.from }}",
+          "options": {}
+        },
+        "id": "appt-list-001",
+        "name": "Fetch Appointments List",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          3104,
+          704
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const ctx = $input.first().json;\nconst appts = $input.first().json;\n\nlet msg = '';\nif (!Array.isArray(appts) || appts.length === 0) {\n  msg = \"You don't have any upcoming appointments. Would you like to book one?\";\n} else {\n  msg = '*Your Upcoming Appointments:*\\n\\n';\n  appts.forEach(function(a, i) {\n    msg += (i + 1) + '. 🦷 *' + a.service + '*\\n';\n    msg += '   📅 ' + a.date + ' at ⏰ ' + a.time + '\\n';\n    if (i < appts.length - 1) msg += '\\n';\n  });\n  msg += '\\nTo reschedule or cancel, just let me know!';\n}\n\nreturn [{\n  json: {\n    from: ctx.from,\n    phoneNumberId: ctx.phoneNumberId,\n    sessionKey: ctx.sessionKey,\n    customerKey: ctx.customerKey,\n    conversation: ctx.conversation,\n    customer: ctx.customer,\n    text: ctx.text,\n    name: ctx.name,\n    extracted: ctx.extracted,\n    responseText: msg,\n    pendingBooking: ctx.pendingBooking || null\n  }\n}];"
+        },
+        "id": "appt-list-002",
+        "name": "Format Appointments List",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          3328,
+          704
         ]
       }
     ],
@@ -2332,6 +2447,13 @@
           ],
           [
             {
+              "node": "Fetch Appointments List",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
               "node": "Format Unclear Response",
               "type": "main",
               "index": 0
@@ -2354,7 +2476,7 @@
         "main": [
           [
             {
-              "node": "Save Conversation Prep",
+              "node": "Auto Book?",
               "type": "main",
               "index": 0
             }
@@ -2630,6 +2752,46 @@
             }
           ]
         ]
+      },
+      "Auto Book?": {
+        "main": [
+          [
+            {
+              "node": "Create Calendar Event",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Save Conversation Prep",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Appointments List": {
+        "main": [
+          [
+            {
+              "node": "Format Appointments List",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Appointments List": {
+        "main": [
+          [
+            {
+              "node": "Save Conversation Prep",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
       }
     },
     "authors": "bagus bagus",
@@ -2638,18 +2800,18 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-07-04T08:56:46.279Z",
-        "id": 518,
+        "createdAt": "2026-07-08T04:53:50.979Z",
+        "id": 540,
         "workflowId": "2fyrX7SJFdRUNh9f",
-        "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
+        "versionId": "cff2fbe6-9e70-48c6-9b88-e5d34f57f700",
         "event": "activated",
         "userId": "425d240d-1a04-4966-99d0-f9cdf7229c01"
       },
       {
-        "createdAt": "2026-07-04T08:56:46.254Z",
-        "id": 517,
+        "createdAt": "2026-07-08T04:53:50.948Z",
+        "id": 539,
         "workflowId": "2fyrX7SJFdRUNh9f",
-        "versionId": "f8592607-86b0-4bd6-ad09-25c357d8f1ef",
+        "versionId": "cff2fbe6-9e70-48c6-9b88-e5d34f57f700",
         "event": "deactivated",
         "userId": "425d240d-1a04-4966-99d0-f9cdf7229c01"
       }
