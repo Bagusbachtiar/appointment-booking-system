@@ -25,3 +25,17 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code memory
+.claude/
+
+# Temp/debug scripts
+_fix_*.js
+tmp*.js
+tmp*.json
+tmp*.txt
+exec*.json
+*_upload.json
+*_live.json
+*_execs.json
+rem_execs.json
