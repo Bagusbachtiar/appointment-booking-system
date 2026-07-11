@@ -6,6 +6,8 @@ A WhatsApp chatbot for dental clinic appointment management. Patients book, resc
 
 > Voice booking · Text booking · List · Cancel · Slot selection · Reschedule · Auto reminder
 
+LinkedIn post: https://www.linkedin.com/feed/update/urn:li:activity:7481681007134306304/
+
 ## Features
 
 - **Voice Message Booking** — send a voice note, Groq Whisper transcribes it, AI extracts intent and books automatically
