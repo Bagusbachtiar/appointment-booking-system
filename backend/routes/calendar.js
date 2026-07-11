@@ -13,8 +13,8 @@ const SERVICE_DURATIONS = {
   'Emergency': 30
 };
 
-const BUSINESS_START = 9;
-const BUSINESS_END = 17;
+const BUSINESS_START = 0;
+const BUSINESS_END = 24;
 
 // GET /api/calendar/availability?date=YYYY-MM-DD&service=Cleaning
 router.get('/availability', async (req, res) => {
@@ -23,12 +23,6 @@ router.get('/availability', async (req, res) => {
     if (!date) return res.status(400).json({ error: 'date required' });
 
     const duration = SERVICE_DURATIONS[service] || 30;
-
-    // Reject weekends
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return res.json({ slots: [], message: 'Clinic closed on weekends' });
-    }
 
     const calendar = getCalendar();
     const timeMin = new Date(date + 'T00:00:00').toISOString();

@@ -1,18 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
+const { getCalendar } = require('../calendar');
+const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
+const TIMEZONE = process.env.TIMEZONE || 'Asia/Jakarta';
+const SERVICE_DURATIONS = { 'Cleaning': 30, 'First Visit': 60, 'Emergency': 30 };
 
-// GET /api/appointments/by-phone/:phone
+// GET /api/appointments/by-phone/:phone?date=YYYY-MM-DD
 router.get('/by-phone/:phone', (req, res) => {
   try {
     const { phone } = req.params;
+    const { date } = req.query;
     const db = getDb();
-    const appt = db.prepare(`
-      SELECT * FROM appointments
-      WHERE phone = ? AND status = 'confirmed'
-      ORDER BY date ASC, time ASC
-      LIMIT 1
-    `).get(phone);
+    const appt = date
+      ? db.prepare(`SELECT * FROM appointments WHERE phone = ? AND date = ? AND status = 'confirmed' ORDER BY time ASC LIMIT 1`).get(phone, date)
+      : db.prepare(`SELECT * FROM appointments WHERE phone = ? AND status = 'confirmed' ORDER BY date ASC, time ASC LIMIT 1`).get(phone);
 
     if (!appt) return res.json(null);
 
@@ -118,6 +120,44 @@ router.get('/pending-reminders', (req, res) => {
     res.json(reminders);
   } catch (e) {
     console.error('[pending-reminders]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/appointments/reschedule — delete old event, create new one
+router.post('/reschedule', async (req, res) => {
+  try {
+    const { appointmentId, oldCalendarEventId, service, date, time, name, phone } = req.body;
+    const db = getDb();
+    const calendar = getCalendar();
+    const dur = SERVICE_DURATIONS[service] || 30;
+
+    // Delete old calendar event
+    if (oldCalendarEventId) {
+      try { await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: oldCalendarEventId }); } catch (e) {}
+    }
+
+    // Create new calendar event
+    const startDt = new Date(`${date}T${time}:00`);
+    const endDt = new Date(startDt.getTime() + dur * 60000);
+    const event = await calendar.events.insert({
+      calendarId: CALENDAR_ID,
+      resource: {
+        summary: `${service} - ${name}`,
+        description: `Patient: ${name}\nPhone: ${phone}`,
+        start: { dateTime: startDt.toISOString(), timeZone: TIMEZONE },
+        end: { dateTime: endDt.toISOString(), timeZone: TIMEZONE },
+        colorId: '1',
+        extendedProperties: { private: { phone, service } }
+      }
+    });
+
+    // Update DB
+    db.prepare(`UPDATE appointments SET date=?, time=?, calendar_event_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(date, time, event.data.id, appointmentId);
+
+    res.json({ success: true, eventId: event.data.id, service, date, time });
+  } catch (e) {
+    console.error('[reschedule]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
