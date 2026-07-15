@@ -20,6 +20,7 @@ const BUSINESS_END = 24;
 router.get('/availability', async (req, res) => {
   try {
     const { date, service } = req.query;
+    console.log('[availability] query:', req.query);
     if (!date) return res.status(400).json({ error: 'date required' });
 
     const duration = SERVICE_DURATIONS[service] || 30;
@@ -62,6 +63,50 @@ router.get('/availability', async (req, res) => {
           time: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
           duration
         });
+      }
+    }
+
+    res.json({ slots, date, service, duration });
+  } catch (e) {
+    console.error('[availability]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/calendar/availability (for Retell function calling)
+router.post('/availability', async (req, res) => {
+  try {
+    const { date, service } = req.body;
+    console.log('[availability] body:', req.body);
+    if (!date) return res.status(400).json({ error: 'date required' });
+
+    const duration = SERVICE_DURATIONS[service] || 30;
+    const calendar = getCalendar();
+    const timeMin = new Date(date + 'T00:00:00').toISOString();
+    const timeMax = new Date(date + 'T23:59:59').toISOString();
+
+    const eventsRes = await calendar.events.list({
+      calendarId: CALENDAR_ID, timeMin, timeMax,
+      singleEvents: true, orderBy: 'startTime'
+    });
+
+    const events = eventsRes.data.items || [];
+    const busyBlocks = events
+      .filter(e => e.start?.dateTime)
+      .map(e => {
+        const start = new Date(e.start.dateTime);
+        const end = new Date(e.end.dateTime);
+        return { start: start.getHours() * 60 + start.getMinutes(), end: end.getHours() * 60 + end.getMinutes() };
+      });
+
+    const slots = [];
+    for (let startMin = BUSINESS_START * 60; startMin + duration <= BUSINESS_END * 60; startMin += 30) {
+      const endMin = startMin + duration;
+      const conflict = busyBlocks.some(b => startMin < b.end && endMin > b.start);
+      if (!conflict) {
+        const h = Math.floor(startMin / 60);
+        const m = startMin % 60;
+        slots.push({ time: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`, duration });
       }
     }
 
