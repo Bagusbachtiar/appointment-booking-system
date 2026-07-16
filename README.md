@@ -1,6 +1,10 @@
-# WhatsApp Appointment Booking System
+# Appointment Booking System
 
-A WhatsApp chatbot for dental clinic appointment management. Patients book, reschedule, cancel, and receive automatic reminders — all through WhatsApp chat, no app or form required.
+Multi-channel AI appointment booking for dental clinics. Patients interact via **WhatsApp** or **phone call** — the system checks availability and books on Google Calendar automatically.
+
+**Channels:**
+- WhatsApp chatbot (text + voice messages via n8n + Ollama)
+- Voice AI phone receptionist (Retell AI + Twilio) — see [`voice-ai/`](./voice-ai/)
 
 ## Demo
 
@@ -53,8 +57,10 @@ appointment-booking-system/
 │   ├── calendar.js         # Google Calendar client
 │   └── routes/
 │       ├── appointments.js # Appointment CRUD + reschedule endpoint
-│       ├── calendar.js     # Availability + event creation
+│       ├── calendar.js     # Availability + event creation (WhatsApp + Voice AI)
 │       └── webhook.js      # Meta webhook proxy → n8n
+├── voice-ai/
+│   └── README.md           # Voice AI setup (Retell + Twilio)
 ├── workflow.json           # n8n main booking workflow (42 nodes)
 ├── reminder_workflow.json  # n8n reminder workflow (runs every 30 min)
 └── admin/                  # Admin dashboard (Vite)
