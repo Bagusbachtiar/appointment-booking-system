@@ -20,7 +20,6 @@ const BUSINESS_END = 24;
 router.get('/availability', async (req, res) => {
   try {
     const { date, service } = req.query;
-    console.log('[availability] query:', req.query);
     if (!date) return res.status(400).json({ error: 'date required' });
 
     const duration = SERVICE_DURATIONS[service] || 30;
@@ -76,8 +75,7 @@ router.get('/availability', async (req, res) => {
 // POST /api/calendar/availability (for Retell function calling)
 router.post('/availability', async (req, res) => {
   try {
-    const { date, service } = req.body;
-    console.log('[availability] body:', req.body);
+    const { date, service } = req.body.args || req.body;
     if (!date) return res.status(400).json({ error: 'date required' });
 
     const duration = SERVICE_DURATIONS[service] || 30;
@@ -120,7 +118,7 @@ router.post('/availability', async (req, res) => {
 // POST /api/calendar/events
 router.post('/events', async (req, res) => {
   try {
-    const { service, date, time, duration, name, phone, notes } = req.body;
+    const { service, date, time, duration, name, phone, notes } = req.body.args || req.body;
     if (!service || !date || !time || !name || !phone) {
       return res.status(400).json({ error: 'Missing required fields: service, date, time, name, phone' });
     }
