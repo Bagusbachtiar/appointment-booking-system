@@ -21,6 +21,7 @@ LinkedIn post: https://www.linkedin.com/feed/update/urn:li:activity:748168100713
 - **Slot Selection** — no time specified? bot checks availability and offers 3 options
 - **Reschedule** — old calendar event deleted, new one created atomically
 - **Automatic Reminders** — WhatsApp message sent 24h and 2h before appointment, no manual trigger
+- **Voice AI Phone Receptionist** — call a real phone number, AI answers and books appointments via Retell AI + Twilio
 
 ## Stack
 
