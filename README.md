@@ -1,52 +1,108 @@
 # Appointment Booking System
 
-Multi-channel AI appointment booking for dental clinics. Patients interact via **WhatsApp** or **phone call** — the system checks availability and books on Google Calendar automatically.
+Multi-channel AI appointment booking for dental clinics. Two independent front-ends — WhatsApp chatbot and AI phone receptionist — share a single Node.js booking backend that handles all calendar logic.
 
 **Channels:**
-- WhatsApp chatbot (text + voice messages via n8n + Ollama)
+- WhatsApp chatbot (text + voice messages via n8n + GPT-4o-mini + Groq Whisper)
 - Voice AI phone receptionist (Retell AI + Twilio) — see [`voice-ai/`](./voice-ai/)
 
 ## Demo
 
-> Voice booking · Text booking · List · Cancel · Slot selection · Reschedule · Auto reminder
+> Voice booking · Text booking · List · Cancel · Slot selection · Reschedule · Auto reminder · Phone call booking
 
 LinkedIn post: https://www.linkedin.com/feed/update/urn:li:activity:7481681007134306304/
 
 ## Features
 
-- **Voice Message Booking** — send a voice note, Groq Whisper transcribes it, AI extracts intent and books automatically
+### WhatsApp Channel
+- **Voice Message Booking** — send a voice note, Groq Whisper transcribes it, processed through the same n8n pipeline as text
 - **Text Auto-Book** — specify time in your message, booked instantly without slot selection
 - **List Appointments** — ask the bot, get all upcoming confirmed bookings
 - **Cancel** — bot asks confirmation first, then removes event from Google Calendar
 - **Slot Selection** — no time specified? bot checks availability and offers 3 options
 - **Reschedule** — old calendar event deleted, new one created atomically
-- **Automatic Reminders** — WhatsApp message sent 24h and 2h before appointment, no manual trigger
-- **Voice AI Phone Receptionist** — call a real phone number, AI answers and books appointments via Retell AI + Twilio
+- **Automatic Reminders** — WhatsApp message sent 24h and 2h before appointment
 
-## Stack
+### Voice AI Channel
+- **Phone Call Booking** — call a real US phone number, AI receptionist answers and books via live voice conversation
+- **Real-time turn-taking** — Retell AI handles speech-to-text, LLM response, and text-to-speech in-call
+- **Same booking engine** — phone calls hit the same backend as WhatsApp, no duplicate logic
+
+---
+
+## Shared Backend
+
+Both channels call the same Node.js + Express booking engine. It owns all create / read / update / cancel / reschedule logic and talks directly to Google Calendar and SQLite. Neither front-end duplicates this logic — they just POST to it.
+
+**Stack:**
+
+| Layer | Technology |
+|---|---|
+| API server | Node.js + Express |
+| Database | SQLite (better-sqlite3) |
+| Calendar | Google Calendar API |
+| Session / dedup | Redis |
+
+---
+
+## WhatsApp Channel
+
+Patient sends a WhatsApp message (text or voice note) → n8n workflow processes it → GPT-4o-mini detects intent → backend called → reply sent back via WhatsApp.
+
+Voice notes take one extra step: Groq Whisper transcribes the audio first, then the transcript enters the same pipeline as a typed message.
+
+**Stack:**
 
 | Layer | Technology |
 |---|---|
 | Chat interface | WhatsApp Cloud API (Meta) |
 | Workflow engine | n8n (self-hosted) |
-| Intent detection | Ollama + llama3 (local LLM) |
+| Intent detection | GPT-4o-mini |
 | Voice transcription | Groq API — whisper-large-v3-turbo |
-| Calendar | Google Calendar API |
-| Backend | Node.js + Express |
-| Database | SQLite (better-sqlite3) |
-| Session / dedup | Redis |
-| Tunnel | ngrok |
+| Tunnel (dev) | ngrok |
 
-## Architecture
+**Pipeline:**
 
 ```
 Patient WhatsApp → Meta Cloud API → ngrok → Express webhook proxy
-→ n8n workflow → Ollama llama3 (intent detection)
-             → Groq Whisper (voice transcription)
-→ Google Calendar (availability check / event create/delete)
-→ SQLite (appointment record)
+→ n8n workflow → GPT-4o-mini (intent detection)
+             ↳ Groq Whisper (voice notes only — transcribe then re-enter pipeline)
+→ Node.js backend → Google Calendar
 → Meta Cloud API → Patient WhatsApp (reply)
 ```
+
+**Workflow files:** `workflow.json` (42-node booking workflow), `reminder_workflow.json` (runs every 30 min)
+
+---
+
+## Voice AI Channel
+
+Caller dials a real Twilio phone number → Twilio routes via SIP trunk to Retell AI → Retell agent (Maya) handles the live conversation → when caller wants to book or check availability, Retell calls a custom function that POSTs to the shared backend.
+
+WhatsApp, n8n, Ollama, and Groq Whisper play no role here. Retell handles its own speech-to-text, LLM, and text-to-speech in-call.
+
+**Stack:**
+
+| Layer | Technology |
+|---|---|
+| Telephony | Twilio (Elastic SIP Trunking) |
+| Voice AI | Retell AI (Single Prompt agent) |
+| Tunnel (dev) | ngrok |
+
+**Pipeline:**
+
+```
+Caller → Twilio US number → SIP trunk → Retell AI agent (Maya)
+                                              ↓
+                                   check_availability (POST)
+                                   book_appointment (POST)
+                                              ↓
+                                     Node.js backend → Google Calendar
+```
+
+See [`voice-ai/README.md`](./voice-ai/README.md) for full Retell + Twilio setup.
+
+---
 
 ## Project Structure
 
@@ -58,7 +114,7 @@ appointment-booking-system/
 │   ├── calendar.js         # Google Calendar client
 │   └── routes/
 │       ├── appointments.js # Appointment CRUD + reschedule endpoint
-│       ├── calendar.js     # Availability + event creation (WhatsApp + Voice AI)
+│       ├── calendar.js     # Availability + event creation (used by both channels)
 │       └── webhook.js      # Meta webhook proxy → n8n
 ├── voice-ai/
 │   └── README.md           # Voice AI setup (Retell + Twilio)
@@ -66,6 +122,8 @@ appointment-booking-system/
 ├── reminder_workflow.json  # n8n reminder workflow (runs every 30 min)
 └── admin/                  # Admin dashboard (Vite)
 ```
+
+---
 
 ## Setup
 
@@ -75,8 +133,8 @@ appointment-booking-system/
 - ngrok account (static domain)
 - Meta WhatsApp Business API access
 - Google Cloud project with Calendar API enabled
-- Groq API key
-- Ollama running locally with llama3
+- Groq API key (WhatsApp channel only)
+- Retell AI account + Twilio account (Voice AI channel only)
 
 ### Environment Variables
 
@@ -112,6 +170,8 @@ ngrok http --domain=your-static-domain.ngrok-free.app 3000
 ```
 
 Import `workflow.json` and `reminder_workflow.json` into n8n, configure credentials, and activate both workflows.
+
+For Voice AI channel setup, see [`voice-ai/README.md`](./voice-ai/README.md).
 
 ## License
 
