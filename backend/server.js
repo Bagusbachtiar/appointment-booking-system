@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => { res.on('finish', () => console.log(`${req.method} ${req.path} ${res.statusCode}`)); next(); });
 
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/appointments', appointmentRoutes);
