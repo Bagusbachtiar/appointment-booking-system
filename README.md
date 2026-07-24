@@ -10,7 +10,8 @@ Multi-channel AI appointment booking for dental clinics. Two independent front-e
 
 > Voice booking · Text booking · List · Cancel · Slot selection · Reschedule · Auto reminder · Phone call booking
 
-LinkedIn post: https://www.linkedin.com/feed/update/urn:li:activity:7481681007134306304/
+LinkedIn — WhatsApp demo: https://www.linkedin.com/feed/update/urn:li:activity:7481681007134306304/
+LinkedIn — Voice AI demo: https://www.linkedin.com/feed/update/urn:li:ugcPost:7486297823966179328/
 
 ## Features
 
